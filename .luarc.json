@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "Lua 5.2",
+  "runtime.special": {},
+  "workspace.library": ["types"],
+  "workspace.checkThirdParty": false,
+  "workspace.ignoreDir": ["docs", "assets", ".vscode"],
+  "diagnostics.globals": [],
+  "diagnostics.disable": ["lowercase-global"],
+  "hint.enable": false,
+  "format.enable": false
+}

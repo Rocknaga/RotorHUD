@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rotorflight GUI proposal</title>
+<style>
+  :root {
+    --bg: #0e0f11;
+    --panel: #1c1e21;
+    --panel-2: #21242a;
+    --accent-panel: #17181b;
+    --accent-border: #2a2c30;
+    --bar-bg: #2f333a;
+    --dim: #9a9da3;
+    --muted: #6b6c6c;
+    --white: #f5f5f6;
+    --green: #5dcaa5;
+    --batt-good: #00e676;
+    --grey: #888780;
+    --blue-accent: #58aaf0;
+    --amber: #ffb300;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: #050506;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .screen {
+    width: 800px; height: 480px; background: var(--bg);
+    position: relative; overflow: hidden; margin: 12px auto;
+    border-radius: 22px;
+  }
+  .row { position: absolute; left: 12px; right: 12px; }
+  .label { color: var(--dim); font-size: 13px; font-weight: 500; }
+  .value { color: var(--white); font-weight: 700; }
+  .sub { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; vertical-align: middle; }
+
+  .icon-badge {
+    width: 30px; height: 30px; border-radius: 10px; flex: 0 0 30px;
+    display: flex; align-items: center; justify-content: center; margin-right: 10px;
+  }
+  .icon-shape { width: 14px; height: 14px; }
+
+  /* Top bar */
+  .topbar { top: 14px; height: 34px; background: var(--panel); border-radius: 17px;
+    display: flex; align-items: center; padding: 0 16px; justify-content: space-between; }
+  .topbar .left, .topbar .right { display: flex; align-items: center; gap: 18px; }
+  .topbar .badge { font-size: 12px; color: var(--dim); display: flex; align-items: center; font-weight: 600; }
+  .clock { font-size: 13px; color: var(--white); font-weight: 600; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 12px; }
+  .bars i { width: 3px; background: var(--green); border-radius: 1px; }
+  .batt-icon { width: 32px; height: 17px; border: 2px solid var(--dim); border-radius: 4px; position: relative; }
+  .batt-icon::after { content: ""; position: absolute; right: -5px; top: 4px; width: 3px; height: 9px; background: var(--dim); border-radius: 0 2px 2px 0; }
+  .batt-fill { position: absolute; top: 2px; left: 2px; bottom: 2px; background: var(--batt-good); border-radius: 2px; }
+
+  /* Headspeed hero */
+  .hero { top: 58px; height: 108px; background: var(--accent-panel); border: 2px solid var(--accent-border);
+    border-radius: 20px;
+    display: flex; align-items: center; padding: 0 28px; justify-content: space-between; }
+  .hero .num { font-size: 72px; font-weight: 800; color: var(--white); letter-spacing: -2px; }
+  .hero .unit { font-size: 20px; color: var(--dim); margin-left: 8px; font-weight: 600; }
+  .hero-right { text-align: right; }
+  .hero-status { font-size: 15px; color: var(--white); margin-bottom: 8px; font-weight: 600;
+    background: var(--panel-2); padding: 6px 14px; border-radius: 20px; display: inline-flex; align-items: center; }
+  .hero-status .dot { background: var(--green); }
+  .hero-label { font-size: 13px; color: var(--dim); font-weight: 600; }
+
+  /* Metric strip */
+  .metrics { top: 180px; height: 78px; display: flex; gap: 10px; }
+  .metric { flex: 1; background: var(--panel); border-radius: 16px; padding: 10px 14px; position: relative;
+    display: flex; flex-direction: column; justify-content: center; }
+  .metric-top { display: flex; align-items: center; }
+  .metric .value { font-size: 25px; display: block; margin-top: 4px; margin-left: 40px; }
+  .metric .sub { position: absolute; bottom: 8px; right: 14px; }
+
+  /* Battery bar */
+  .battery-row { top: 270px; height: 70px; }
+  .battery-bar { position: relative; height: 100%; border-radius: 18px; overflow: hidden; background: var(--bar-bg);
+    display: flex; align-items: center; }
+  .battery-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 91%; background: var(--batt-good); border-radius: 18px; }
+  .battery-icon-badge { position: relative; z-index: 2; margin-left: 14px; width: 34px; height: 34px; border-radius: 12px;
+    background: rgba(0,0,0,0.15); display: flex; align-items: center; justify-content: center; }
+  .battery-label { position: relative; z-index: 2; font-size: 19px; font-weight: 700; color: #06341f; margin-left: 10px; }
+  .battery-value { position: absolute; right: 18px; top: 0; height: 100%; display: flex; align-items: center;
+    font-size: 24px; font-weight: 800; color: #06341f; z-index: 2; }
+
+  /* Footer row */
+  .footer { top: 350px; bottom: 14px; display: flex; gap: 10px; }
+  .gov-card { flex: 0 0 27%; background: var(--panel); border-radius: 16px; display: flex; align-items: center; padding: 0 16px; }
+  .gov-card .dot { background: var(--grey); width: 10px; height: 10px; }
+  .gov-card .value { font-size: 16px; }
+  .throttle-card { flex: 1; background: var(--panel); border-radius: 16px; padding: 12px 16px; position: relative; }
+  .throttle-bar { margin-top: 10px; height: 12px; background: var(--bar-bg); border-radius: 8px; overflow: hidden; }
+  .throttle-fill { width: 27%; height: 100%; background: var(--blue-accent); border-radius: 8px; }
+  .throttle-value { font-size: 16px; }
+  .side-card { flex: 0 0 30%; background: var(--panel); border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; }
+  .side-top { flex: 0 0 44%; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+  .side-top .value { font-size: 20px; }
+  .side-bottom { flex: 1; margin: 0 10px 10px; border-radius: 12px; background: var(--panel-2);
+    display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <div class="row topbar">
+    <div class="left">
+      <span class="badge"><span class="dot" style="background:var(--grey)"></span>Disarmed</span>
+      <span class="badge"><span class="dot" style="background:var(--grey)"></span>Motor off</span>
+    </div>
+    <div class="right">
+      <span class="clock">2026/09/20 22:35</span>
+      <div class="bars">
+        <i style="height:25%"></i><i style="height:50%"></i><i style="height:75%"></i><i style="height:100%"></i>
+      </div>
+      <div class="batt-icon"><div class="batt-fill" style="width:70%"></div></div>
+    </div>
+  </div>
+
+  <div class="row hero">
+    <div>
+      <span class="num">1750</span><span class="unit">rpm</span>
+    </div>
+    <div class="hero-right">
+      <div class="hero-status"><span class="dot"></span>Armed</div>
+      <div class="hero-label">Headspeed</div>
+    </div>
+  </div>
+
+  <div class="row metrics">
+    <div class="metric">
+      <div class="metric-top">
+        <div class="icon-badge" style="background:rgba(88,170,240,0.18)">
+          <svg class="icon-shape" viewBox="0 0 24 24" fill="none" stroke="#58aaf0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
+        </div>
+        <span class="label">Volt</span>
+      </div>
+      <span class="value">11.1v</span><span class="sub">min 11.0v</span>
+    </div>
+    <div class="metric">
+      <div class="metric-top">
+        <div class="icon-badge" style="background:rgba(93,202,165,0.18)">
+          <svg class="icon-shape" viewBox="0 0 24 24" fill="none" stroke="#5dcaa5" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-7 6 14 3-7h4"/></svg>
+        </div>
+        <span class="label">Current</span>
+      </div>
+      <span class="value">0.9A</span><span class="sub">max 1.6A</span>
+    </div>
+    <div class="metric">
+      <div class="metric-top">
+        <div class="icon-badge" style="background:rgba(136,135,128,0.18)">
+          <svg class="icon-shape" viewBox="0 0 24 24" fill="none" stroke="#c8c7c2" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="16" height="12" rx="3"/><path d="M19 10v4"/></svg>
+        </div>
+        <span class="label">Vcel</span>
+      </div>
+      <span class="value">3.67v</span>
+    </div>
+    <div class="metric">
+      <div class="metric-top">
+        <div class="icon-badge" style="background:rgba(88,170,240,0.18)">
+          <svg class="icon-shape" viewBox="0 0 24 24" fill="none" stroke="#58aaf0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
+        </div>
+        <span class="label">Bec volt</span>
+      </div>
+      <span class="value">5.0v</span><span class="sub">min 4.9v</span>
+    </div>
+    <div class="metric">
+      <div class="metric-top">
+        <div class="icon-badge" style="background:rgba(255,179,0,0.18)">
+          <svg class="icon-shape" viewBox="0 0 24 24" fill="none" stroke="#ffb300" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+        </div>
+        <span class="label">Flight</span>
+      </div>
+      <span class="value">00:48</span>
+    </div>
+  </div>
+
+  <div class="row battery-row">
+    <div class="battery-bar">
+      <div class="battery-fill"></div>
+      <div class="battery-icon-badge">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#06341f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="17" height="10" rx="3"/><path d="M21 10v4"/></svg>
+      </div>
+      <div class="battery-label">Battery</div>
+      <div class="battery-value">91% / 12mAh</div>
+    </div>
+  </div>
+
+  <div class="row footer">
+    <div class="gov-card"><span class="dot"></span><span class="value">Governor spoolup</span></div>
+    <div class="throttle-card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span class="label">Throttle</span><span class="value throttle-value">27% / 32&deg;C</span>
+      </div>
+      <div class="throttle-bar"><div class="throttle-fill"></div></div>
+    </div>
+    <div class="side-card">
+      <div class="side-top">
+        <span class="label">Profile/Rate</span><span class="value">1/1</span>
+      </div>
+      <div class="side-bottom">model photo</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

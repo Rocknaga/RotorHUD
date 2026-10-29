@@ -1,0 +1,1 @@
+{ "name": "rftelem-luatest", "private": true, "description": "Headless RFTelem main.lua runner (fengari + EdgeTX stubs)", "scripts": { "test": "node run.js ../../sdcard/WIDGETS/RFTelem/main.lua driver.lua draw" }, "dependencies": { "fengari": "0.1.4" } }
