@@ -2071,7 +2071,16 @@ local function alert(wgt, tier, voice)
   local cfg = CONFIG.alarm
   local muted = wgt.alarmMuted
   local path = voice and (cfg.dir .. voiceSetDir(wgt) .. "/" .. voice .. ".wav")
-  if CONFIG.simulate then print("RFTelem alarm: " .. tier .. " " .. tostring(path) .. (muted and " (muted)" or "")) end
+  if CONFIG.simulate then
+    -- Simulator only: debug output plus /LOGS/rftelem_alarms.log, so a
+    -- run can be checked from the SD folder without the debug window.
+    local line = string.format("%.2f %s %s%s", getTime() / 100, tier, tostring(path), muted and " (muted)" or "")
+    print("RFTelem alarm: " .. line)
+    pcall(function()
+      local f = io.open("/LOGS/rftelem_alarms.log", "a")
+      if f then io.write(f, line, "\n"); io.close(f) end
+    end)
+  end
   if path and not muted and playFile then playFile(path) end
   if tier == "critical" then
     playPattern(cfg.hapticCritical)
