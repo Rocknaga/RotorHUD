@@ -280,6 +280,7 @@ local CONFIG = {
     enabled     = true,
     dir         = "/SOUNDS/rf/",
     voiceSets   = { "no7", "ryusei", "takehiro", "himari", "voidoll", "zundamon" },
+    voiceLabels = { "No.7", "Ryusei", "Takehiro", "Himari", "Voidoll", "Zundamon" }, -- standby screen
     repeatSec   = 10,    -- critical alarms repeat this often while active
     cellCaution = 3.60,  -- V/cell, sustained cellSustainSec (rotor spinning)
     cellCritical = 3.50,
@@ -1185,6 +1186,11 @@ local function drawTab(x, y, w, h, label, value, subText, iconFn, markColor)
     labelX = left + 14
   end
   lcd.drawText(labelX, ly, label, LEFT + VCENTER + SMLSIZE + COLOR.dim)
+  -- The min/max/extra note is dropped rather than drawn over the label
+  -- when the tab is too narrow for both.
+  if subText and labelX + textWidth(label, SMLSIZE) + 10 + textWidth(subText, SMLSIZE) > x + w - 8 then
+    subText = nil
+  end
   if subText then
     lcd.drawText(x + w - 8, ly, subText, RIGHT + VCENTER + SMLSIZE + COLOR.muted)
   end
@@ -1511,13 +1517,87 @@ local function drawTransitionOverlay(wgt, w, h)
   lcd.drawFilledRectangle(math.max(0, revealX - 3), 0, 3, h, COLOR.accent)
 end
 
+-- Standby ("Waiting for connection"), built from the dashboard's pieces
+-- and filled with what is known without a model link: a big clock and the
+-- model card (hero panel), a status strip with a sweeping scan bar so the
+-- screen visibly isn't frozen, and tabs for the TX battery, this
+-- session's last flight, and the alarm voice / mute state.
 local function drawStandby(wgt, y, w, h)
-  local areaH = h - y
-  lcd.drawFilledRectangle(0, y, w, areaH, COLOR.bg)
+  lcd.drawFilledRectangle(0, y, w, h - y, COLOR.bg)
+  local pad = 12
+  local panelW = w - pad * 2
 
-  local cx = w / 2
-  lcd.drawText(cx, y + areaH * 0.40, "Waiting for connection",
-    CENTER + VCENTER + DBLSIZE + COLOR.white)
+  -- Hero: clock (left half) | model card (right half). 270 fills the
+  -- 800x480 screen down to the bottom padding with the rows below.
+  local heroH = 270
+  drawChamferedRect(pad, y, panelW, heroH, COLOR.accentBorder, COLOR.bg, 8)
+  drawChamferedRect(pad + 1, y + 1, panelW - 2, heroH - 2, COLOR.accentPanel, COLOR.accentBorder, 7)
+  local half = math.floor(panelW / 2)
+  local leftCx, rightCx = pad + half / 2, pad + half + half / 2
+  local ok, dt = pcall(getDateTime)
+  if ok and dt then
+    lcd.drawText(leftCx, y + heroH / 2 - 10, string.format("%02d:%02d", dt.hour, dt.min),
+      CENTER + VCENTER + XXLSIZE + COLOR.white)
+    lcd.drawText(leftCx, y + heroH - 34, string.format("%04d/%02d/%02d", dt.year, dt.mon, dt.day),
+      CENTER + VCENTER + SMLSIZE + COLOR.dim)
+  end
+  lcd.drawFilledRectangle(pad + half, y + 24, 1, heroH - 48, COLOR.muted)
+  local imgY = y + 62
+  if CONFIG.showModelImage and wgt.modelBitmap then
+    pcall(function()
+      lcd.drawBitmap(wgt.modelBitmap, math.floor(rightCx - CONFIG.modelImageW / 2), imgY)
+    end)
+  end
+  local modelName = (model and model.getInfo and model.getInfo().name) or ""
+  lcd.drawText(rightCx, imgY + CONFIG.modelImageH + 48, modelName,
+    CENTER + VCENTER + fitFontMeasured(half - 40, 55, modelName, DBLSIZE) + COLOR.white)
+  lcd.drawText(rightCx, y + heroH - 34, "Model", CENTER + VCENTER + SMLSIZE + COLOR.dim)
+
+  -- Status strip: "Waiting for connection" + 2s sweeping scan bar
+  local sy, sh = y + heroH + pad, 56
+  drawChamferedRect(pad, sy, panelW, sh, COLOR.panel, COLOR.bg, 6)
+  local dots = string.rep(".", math.floor(getTime() / 50) % 4)
+  lcd.drawText(pad + 16, sy + 22, "Waiting for connection" .. dots,
+    LEFT + VCENTER + MIDSIZE + COLOR.white)
+  lcd.drawText(pad + panelW - 16, sy + 22, "Power on the model",
+    RIGHT + VCENTER + SMLSIZE + COLOR.dim)
+  local trackX, trackW, trackY = pad + 16, panelW - 32, sy + sh - 9
+  lcd.drawFilledRectangle(trackX, trackY, trackW, 3, COLOR.barBg)
+  local segW = 120
+  local segX = trackX + math.floor((trackW - segW) * ((getTime() % 200) / 200))
+  lcd.drawFilledRectangle(segX, trackY, segW, 3, COLOR.accent)
+
+  -- Tabs: TX battery | Last flight | Voice | Alarms
+  local ty, tabH = sy + sh + pad, 62
+  drawChamferedRect(pad, ty, panelW, tabH, COLOR.panel, COLOR.bg, 6)
+  local txPct, txV = getTxBatteryPct()
+  local voiceIdx = math.floor((wgt.options and wgt.options.Voice) or 0)
+  local labels = CONFIG.alarm.voiceLabels
+  local alarmsValue, alarmsColor = "On", COLOR.green
+  if not CONFIG.alarm.enabled then
+    alarmsValue, alarmsColor = "Off", COLOR.grey
+  elseif wgt.alarmMuted then
+    alarmsValue, alarmsColor = "Muted", COLOR.orange
+  end
+  local tabs = {
+    { "TX battery", txV and (fmt(txV, 1) .. "v") or "--", txPct and (fmt(txPct, 0) .. "%"),
+      batteryLabelIconFn, txPct and getChargeColor(txPct) },
+    { "Last flight", (wgt.flightSeconds or 0) > 0 and fmtTime(wgt.flightSeconds) or "--",
+      wgt.maxCapacity and (fmt(wgt.maxCapacity, 0) .. "mAh"), flightIconFn },
+    { "Voice", labels[voiceIdx + 1] or labels[1], nil, nil },
+    { "Alarms", alarmsValue, nil, nil, alarmsColor },
+  }
+  -- Widths follow the content: "Last flight" + "3800mAh" needs ~220px,
+  -- Voice/Alarms values are short.
+  local fracs = { 0.26, 0.30, 0.22 }
+  local tx = pad
+  for i = 1, 4 do
+    local tab = tabs[i]
+    local tw = fracs[i] and math.floor(panelW * fracs[i]) or (pad + panelW - tx)
+    if i > 1 and not tab[5] then lcd.drawFilledRectangle(tx, ty + 10, 1, tabH - 20, COLOR.muted) end
+    drawTab(tx + 2, ty + 1, tw - 4, tabH - 2, tab[1], tab[2], tab[3], tab[4], tab[5])
+    tx = tx + tw
+  end
 end
 
 -- Post-flight summary, shown instead of the plain standby screen right
@@ -1576,8 +1656,14 @@ local function drawFlightLog(wgt, y, w, h)
   if wgt.disconnectTime then
     remain = math.max(0, remain - math.floor((getTime() - wgt.disconnectTime) / 100))
   end
-  lcd.drawText(pad + panelW - 14, y + titleH / 2, "Tap to close (" .. remain .. "s)",
-    RIGHT + VCENTER + SMLSIZE + COLOR.muted)
+  -- Close button: tap (full-screen only), Enter, or the "Close" option's
+  -- switch all go back to standby (see refresh()/tick()). The countdown
+  -- is the auto-close timeout.
+  local btnW, btnH = 150, 30
+  local btnX, btnY = pad + panelW - 8 - btnW, y + (titleH - btnH) / 2
+  drawChamferedRect(btnX, btnY, btnW, btnH, COLOR.barBg, COLOR.panel, 4)
+  lcd.drawText(btnX + 14, btnY + btnH / 2, "Close", LEFT + VCENTER + SMLSIZE + COLOR.white)
+  lcd.drawText(btnX + btnW - 14, btnY + btnH / 2, remain .. "s", RIGHT + VCENTER + SMLSIZE + COLOR.dim)
 
   -- Stats: two rows of four tabs
   local avgRpm, avgCur = seriesAverage(s.rpm), seriesAverage(s.current)
@@ -2046,11 +2132,16 @@ local GOV_VOICE = {
 -- No headspeed signal: called out as a repeating critical, not as info.
 local GOV_CRITICAL = { ["FALLBACK"] = true, ["LOST-HS"] = true }
 
-local function isMuted(wgt)
-  local src = wgt.options and wgt.options.Mute
+-- A SOURCE widget option counts as "on" while its value is > 0 (switch
+-- down / momentary pressed / logical switch true). Unset = never on.
+local function sourceActive(src)
   if not src or src == 0 then return false end
   local ok, v = pcall(getValue, src)
   return ok and type(v) == "number" and v > 0
+end
+
+local function isMuted(wgt)
+  return sourceActive(wgt.options and wgt.options.Mute)
 end
 
 local function playPattern(pattern)
@@ -2285,6 +2376,16 @@ local function tick(wgt)
   else
     wgt.disconnectTime = nil
   end
+
+  -- "Close" option (e.g. the SH momentary button): a press - rising edge,
+  -- so a switch already held at disconnect doesn't count - closes the
+  -- flight log. Polled here, so it works without full-screen mode, which
+  -- is the only mode where touch/key events reach a widget.
+  local closeOn = sourceActive(wgt.options and wgt.options.Close)
+  if closeOn and not wgt.closeWasOn and not connected then
+    wgt.showFlightLog = false
+  end
+  wgt.closeWasOn = closeOn
   return t, connected
 end
 
@@ -2313,12 +2414,13 @@ local function refresh(wgt, event, touchState)
   ensureModelImage(wgt)
   ensureTxBatteryIcons(wgt)
 
-  -- A tap while showing the flight log dismisses it immediately, in
-  -- favor of the plain "waiting" standby screen, for the rest of this
-  -- disconnect - only ever delivered when the widget is full-screen
-  -- (see the FLIGHT LOG note near the top of this file). Elsewhere,
-  -- the timeout above is what dismisses it instead.
-  if event == EVT_TOUCH_TAP and not connected then
+  -- A tap or Enter while showing the flight log dismisses it, in favor of
+  -- the standby screen, for the rest of this disconnect - only ever
+  -- delivered when the widget is full-screen (see the FLIGHT LOG note
+  -- near the top of this file). Elsewhere, the "Close" option's switch
+  -- (tick()) or the timeout dismisses it instead.
+  if not connected and event and event ~= 0 and
+     (event == EVT_TOUCH_TAP or event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
     wgt.showFlightLog = false
   end
 
@@ -2349,10 +2451,13 @@ end
 -- "Voice" picks the alarm voice set (index into CONFIG.alarm.voiceSets):
 -- 0=No.7 announce, 1=Aoyama Ryusei, 2=Kurono Takehiro, 3=Meimei Himari,
 -- 4=Voidoll, 5=Zundamon.
+-- "Close" picks a source (e.g. the SH momentary button) that closes the
+-- flight log when pressed - works even when the widget isn't full-screen.
 local options = {
   { "Theme", VALUE, 0, 0, 2 }, -- 0=color, 1=mono, 2=cyan
   { "Mute", SOURCE, 0 },
   { "Voice", VALUE, 0, 0, 5 },
+  { "Close", SOURCE, 0 },
 }
 
 return {

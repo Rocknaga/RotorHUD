@@ -67,7 +67,17 @@
 5. フッター (15%): Throttle バー (`% / ℃`、白文字固定) とモデル名カード
    (機体画像 186×46 を等倍・中央、その下にモデル名)
 
+## 待機画面 (`drawStandby`)
+
+- 上段パネル: 大きな時計 (XXLSIZE) + 日付 | 機体画像 + 機体名
+- 状態帯: 「Waiting for connection」(ドットが増減) + 2 秒周期で動くスキャンバー
+- タブ (26/30/22/22%): TX battery (電圧、%、残量色の帯) / Last flight (このセッションの飛行時間と消費 mAh) /
+  Voice (選択中の声) / Alarms (On / Muted / Off、色の帯)
+
 ## フライトログ (`drawFlightLog`)
+
+- 閉じ方: タイトル帯の Close ボタン (タップ、全画面時のみ) / Enter (全画面時のみ) /
+  オプション `Close` のスイッチ (立ち上がりで閉じる。`tick` で判定するので全画面でなくても効く) / 60 秒経過
 
 - タイトル帯 (Flight log / 機体名 / 自動終了までの残り秒) → 4 タブ × 2 段 (`drawTab`) → グラフ 3 枚
 - 上段: Flight time / Max rpm (avg) / Max amps (avg) / Max power (V×A の最大)

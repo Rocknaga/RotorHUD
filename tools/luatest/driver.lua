@@ -60,6 +60,8 @@ local muteVal = 0
 getValue = function(src)
   if src == "tx-voltage" then return 7.9 end
   if src == 999 then return muteVal end
+  -- "close": Close switch pressed for 0.5s at 90s (flight log is up 75..135s)
+  if src == 998 then return (opts.close and NOW >= 9000 and NOW < 9050) and 1024 or -1024 end
   return 0
 end
 getFieldInfo = function() return nil end
@@ -91,7 +93,7 @@ for a in pairs(opts) do
   local n = a:match("^voice(%d+)$")
   if n then voiceOpt = tonumber(n) end
 end
-local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 }, { Theme = 0, Mute = 999, Voice = voiceOpt })
+local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 }, { Theme = 0, Mute = 999, Voice = voiceOpt, Close = 998 })
 
 local screens = {}
 for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
