@@ -54,6 +54,13 @@ lcd = {
   sizeText = function(text, flags) local f = fontOf(flags); return #tostring(text) * f[1], f[2] end,
   loadBitmap = function() return nil end,
 }
+-- "cpu": near-zero-cost lcd stubs, so the instruction count is mostly the
+-- widget's own Lua (on the radio lcd.* are C functions).
+if opts.cpu then
+  local function noop() end
+  lcd.drawFilledRectangle, lcd.drawText, lcd.drawBitmap = noop, noop, noop
+  lcd.sizeText = function(text, flags) return #text * 12, 27 end
+end
 Bitmap = { open = function() return nil end }
 getTime = function() return NOW end
 local muteVal = 0
@@ -95,21 +102,45 @@ for a in pairs(opts) do
 end
 local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 }, { Theme = 0, Mute = 999, Voice = voiceOpt, Close = 998 })
 
+-- Lua instructions per refresh() (EdgeTX aborts a frame with "CPU limit"
+-- past a fixed instruction budget). Counted in blocks of 100 via a hook;
+-- the max per screen type is printed at the end.
+local instr, maxInstr, lastInstr = 0, {}, {}
+debug.sethook(function() instr = instr + 100 end, "", 100)
+
 local screens = {}
 for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
   NOW = step * 5
   muteVal = (opts.mute and NOW >= 3000 and NOW < 6000) and 1024 or 0
+  -- "longflight": just before the 75s disconnect, fill the graph samples
+  -- to one short of the 400 cap (a long flight's worst case)
+  if opts.longflight and NOW == 7400 then
+    local s = wgt.samples
+    for i = #s.rpm + 1, 399 do
+      s.rpm[i], s.current[i], s.voltage[i] = 2100 + i % 7, 40 + i % 30, 50 - i / 50
+    end
+  end
   if opts.bg and NOW >= 4000 and NOW < 6000 then
     widget.background(wgt)
   else
+    instr = 0
     widget.refresh(wgt, 0, nil)
+    local st = wgt.lastScreenType or "?"
+    if instr > (maxInstr[st] or 0) then maxInstr[st] = instr end
+    lastInstr[st] = instr
     if wgt.lastScreenType and screens[#screens] ~= wgt.lastScreenType then
       screens[#screens + 1] = wgt.lastScreenType
       print("SCREEN " .. wgt.lastScreenType)
     end
   end
 end
+debug.sethook()
 oprint(string.format("haptic pulses: %d, draw calls: %d", haptics, draws))
+-- Includes the stubs' own Lua (real lcd.* calls are C), so read these as
+-- relative numbers between versions, not as the radio's real count.
+for st, n in pairs(maxInstr) do
+  oprint(string.format("Lua instructions/frame  %-11s max %6d  last %6d", st, n, lastInstr[st] or 0))
+end
 oprint(string.format("flight %.1fs, samples %d, maxPower %.0fW, minCell %.2f",
   wgt.flightSeconds, #wgt.samples.rpm, wgt.maxPower or -1, wgt.minCellVoltage or -1))
 local seen = {}

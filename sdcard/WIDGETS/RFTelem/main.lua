@@ -1527,9 +1527,9 @@ local function drawStandby(wgt, y, w, h)
   local pad = 12
   local panelW = w - pad * 2
 
-  -- Hero: clock (left half) | model card (right half). 270 fills the
-  -- 800x480 screen down to the bottom padding with the rows below.
-  local heroH = 270
+  -- Hero: clock (left half) | model card (right half). Takes whatever
+  -- height the status strip (56) and tabs (62) below leave over.
+  local heroH = (h - pad) - y - (pad + 56 + pad + 62)
   drawChamferedRect(pad, y, panelW, heroH, COLOR.accentBorder, COLOR.bg, 8)
   drawChamferedRect(pad + 1, y + 1, panelW - 2, heroH - 2, COLOR.accentPanel, COLOR.accentBorder, 7)
   local half = math.floor(panelW / 2)
@@ -1542,7 +1542,7 @@ local function drawStandby(wgt, y, w, h)
       CENTER + VCENTER + SMLSIZE + COLOR.dim)
   end
   lcd.drawFilledRectangle(pad + half, y + 24, 1, heroH - 48, COLOR.muted)
-  local imgY = y + 62
+  local imgY = y + math.floor(heroH * 0.22)
   if CONFIG.showModelImage and wgt.modelBitmap then
     pcall(function()
       lcd.drawBitmap(wgt.modelBitmap, math.floor(rightCx - CONFIG.modelImageW / 2), imgY)
@@ -1606,31 +1606,130 @@ end
 -- holding at the moment of disconnect - resetTelemetryState() doesn't
 -- clear them until the *next* reconnect, so they're still sitting
 -- there, unchanged, for exactly this purpose.
-local function seriesAverage(series)
-  local n = #series
-  if n == 0 then return nil end
-  local sum = 0
-  for i = 1, n do sum = sum + series[i] end
-  return sum / n
+-- Max/min/average of the graph samples in one pass, cached until the
+-- samples change. The flight log redraws every frame and the series can
+-- hold up to FLIGHT_SAMPLES_MAX points: recomputing them per frame pushed
+-- a 400-sample log close to EdgeTX's per-frame "CPU limit".
+-- Second return value is true on the frame the stats were (re)computed.
+local function flightSampleStats(wgt)
+  local s, c = wgt.samples, wgt.flightStats
+  local n = #s.rpm
+  if c and c.series == s.rpm and c.n == n then return c, false end
+  local rpm, cur, volt = s.rpm, s.current, s.voltage
+  local maxRpm, maxCur, sumRpm, sumCur, minV, maxV = 0, 0, 0, 0, nil, nil
+  for i = 1, n do
+    local r, a, v = rpm[i], cur[i], volt[i]
+    if r > maxRpm then maxRpm = r end
+    if a > maxCur then maxCur = a end
+    sumRpm, sumCur = sumRpm + r, sumCur + a
+    if v > 0 then
+      if not minV or v < minV then minV = v end
+      if not maxV or v > maxV then maxV = v end
+    end
+  end
+  c = { series = rpm, n = n, maxRpm = maxRpm, maxCur = maxCur, minV = minV, maxV = maxV,
+        avgRpm = (n > 0) and sumRpm / n or nil, avgCur = (n > 0) and sumCur / n or nil }
+  wgt.flightStats = c
+  return c, true
 end
 
+-- "Nice" axis step (1/2/5 x 10^n) giving about `count` intervals over range.
+local function niceStep(range, count)
+  if range <= 0 then return 1 end
+  local raw = range / count
+  local mag = 10 ^ math.floor(math.log(raw, 10))
+  local n = raw / mag
+  local step = (n <= 1 and 1) or (n <= 2 and 2) or (n <= 5 and 5) or 10
+  return step * mag
+end
+
+-- Time-axis step in seconds: the first of these giving <= 3 intervals,
+-- so the "m:ss" labels (~50px in SMLSIZE) never collide.
+local TIME_STEPS = { 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600 }
+
 -- Area chart from plain rectangles (no curve primitives): one 2px column
--- per slice of the series, scaled lo..hi, plus a faint 50% grid line.
-local function drawSeriesChart(x, y, w, h, series, lo, hi, color)
+-- per slice of the series. The value axis is rounded out to nice ticks
+-- (labels in a 40px column on the left, grid lines cut through the area
+-- in the panel color); the time axis gets m:ss ticks under the baseline.
+-- lo/hi are the data range; durationSec is the time the series spans;
+-- cache (optional) is a table this chart may keep its column heights in.
+local function drawSeriesChart(x, y, w, h, series, lo, hi, color, durationSec, cache)
   local n = #series
-  lcd.drawFilledRectangle(x, y + math.floor(h / 2), w, 1, COLOR.barBg)
-  lcd.drawFilledRectangle(x, y + h - 1, w, 1, COLOR.muted)
+  local labelW = 40
+  local px, pw = x + labelW, w - labelW
+  lcd.drawFilledRectangle(px, y + h - 1, pw, 1, COLOR.muted)
   if n < 2 or hi <= lo then
-    lcd.drawText(x + w / 2, y + h / 2, "No data", CENTER + VCENTER + SMLSIZE + COLOR.muted)
+    lcd.drawText(px + pw / 2, y + h / 2, "No data", CENTER + VCENTER + SMLSIZE + COLOR.muted)
     return
   end
+
+  local step = niceStep(hi - lo, 4)
+  local axisLo, axisHi = math.floor(lo / step) * step, math.ceil(hi / step) * step
+  local span = axisHi - axisLo
+  local decimals = (step < 1) and 1 or 0
+  local function tickY(v) return y + h - 1 - math.floor((v - axisLo) / span * (h - 1)) end
+
+  -- Grid behind the area, one solid line per tick (shows where there's
+  -- no data). NOTE: EdgeTX stops refresh() with "CPU limit" when a frame
+  -- runs too many Lua instructions - a dotted version of this grid (~400
+  -- extra rect calls) tripped it in the simulator, so keep it cheap.
+  local g = axisLo + step
+  while g <= axisHi + step / 2 do
+    lcd.drawFilledRectangle(px, tickY(g), pw, 1, COLOR.muted)
+    g = g + step
+  end
+
+  -- Column heights only change when the series or the geometry does, so
+  -- they're computed once and kept in `cache` (the flight log redraws the
+  -- same data every frame for up to a minute).
   local colW = 2
-  for cx = 0, w - colW, colW do
-    local v = series[math.floor(cx * n / w) + 1]
-    local f = math.max(0, math.min(1, (v - lo) / (hi - lo)))
-    local bh = math.floor(f * (h - 1))
-    if bh > 0 then
-      lcd.drawFilledRectangle(x + cx, y + h - 1 - bh, colW, bh, color)
+  local cols = cache and cache.series == series and cache.n == n and cache.pw == pw
+    and cache.h == h and cache.lo == axisLo and cache.hi == axisHi and cache.cols
+  if not cols then
+    -- Kept lean (locals, no math.min/max calls): this pass runs inside a
+    -- single frame for all three charts.
+    cols = {}
+    local floor, top = math.floor, h - 1
+    local scale, idxStep = top / span, n / pw
+    local k = 0
+    for cx = 0, pw - colW, colW do
+      local bh = (series[floor(cx * idxStep) + 1] - axisLo) * scale
+      if bh < 0 then bh = 0 elseif bh > top then bh = top end
+      k = k + 1
+      cols[k] = floor(bh)
+    end
+    if cache then
+      cache.series, cache.n, cache.pw, cache.h, cache.lo, cache.hi, cache.cols =
+        series, n, pw, h, axisLo, axisHi, cols
+    end
+  end
+  local base = y + h - 1
+  for i = 1, #cols do
+    local bh = cols[i]
+    if bh > 0 then lcd.drawFilledRectangle(px + (i - 1) * colW, base - bh, colW, bh, color) end
+  end
+
+  -- Value ticks: grid line cut through the area + label on the left
+  local v = axisLo
+  while v <= axisHi + step / 2 do
+    local ty = tickY(v)
+    if v > axisLo then lcd.drawFilledRectangle(px, ty, pw, 1, COLOR.panel) end
+    lcd.drawText(px - 6, ty, fmt(v, decimals), RIGHT + VCENTER + SMLSIZE + COLOR.muted)
+    v = v + step
+  end
+
+  -- Time ticks under the baseline
+  if durationSec and durationSec > 0 then
+    local tStep = TIME_STEPS[#TIME_STEPS]
+    for i = 1, #TIME_STEPS do
+      if durationSec / TIME_STEPS[i] <= 3 then tStep = TIME_STEPS[i]; break end
+    end
+    local t = 0
+    while t <= durationSec do
+      local tx = px + math.floor(t / durationSec * (pw - 1))
+      lcd.drawFilledRectangle(tx, y + h, 1, 4, COLOR.muted)
+      lcd.drawText(tx, y + h + 13, fmtTime(t), CENTER + VCENTER + SMLSIZE + COLOR.muted)
+      t = t + tStep
     end
   end
 end
@@ -1666,7 +1765,11 @@ local function drawFlightLog(wgt, y, w, h)
   lcd.drawText(btnX + btnW - 14, btnY + btnH / 2, remain .. "s", RIGHT + VCENTER + SMLSIZE + COLOR.dim)
 
   -- Stats: two rows of four tabs
-  local avgRpm, avgCur = seriesAverage(s.rpm), seriesAverage(s.current)
+  -- statsFresh: this frame paid for the stats pass, so the charts (their
+  -- own column pass) wait one frame - spreading the work keeps each frame
+  -- under EdgeTX's "CPU limit"; the wipe transition hides the gap.
+  local stats, statsFresh = flightSampleStats(wgt)
+  local avgRpm, avgCur = stats.avgRpm, stats.avgCur
   local power = "--"
   if wgt.maxPower then
     power = (wgt.maxPower >= 1000) and (fmt(wgt.maxPower / 1000, 1) .. "kW") or (fmt(wgt.maxPower, 0) .. "W")
@@ -1708,38 +1811,33 @@ local function drawFlightLog(wgt, y, w, h)
   local gh = h - pad - gy
   local gGap = 8
   local gw = math.floor((panelW - gGap * 2) / 3)
-  local maxRpm, maxCur = 0, 0
-  local minV, maxV = nil, nil
-  for i = 1, #s.rpm do
-    maxRpm = math.max(maxRpm, s.rpm[i])
-    maxCur = math.max(maxCur, s.current[i])
-    local v = s.voltage[i]
-    if v > 0 then
-      minV = minV and math.min(minV, v) or v
-      maxV = maxV and math.max(maxV, v) or v
-    end
-  end
+  local maxRpm, maxCur, minV, maxV = stats.maxRpm, stats.maxCur, stats.minV, stats.maxV
   -- Scales come from the 1s samples; the headline numbers come from the
   -- per-frame trackers, so they match the tabs above exactly.
+  -- drawSeriesChart rounds these out to nice tick values.
   local graphs = {
-    { "Headspeed", s.rpm,     0, maxRpm * 1.1, COLOR.accent,
+    { "Headspeed", s.rpm,     0, maxRpm, COLOR.accent,
       wgt.maxHeadspeed and ("max " .. fmt(wgt.maxHeadspeed, 0)) },
-    { "Current",   s.current, 0, maxCur * 1.1, COLOR.orange,
+    { "Current",   s.current, 0, maxCur, COLOR.orange,
       wgt.maxCurrent and ("max " .. fmt(wgt.maxCurrent, 1) .. "A") },
-    { "Voltage",   s.voltage, (minV or 0) * 0.98, (maxV or 0) * 1.01, COLOR.green,
+    { "Voltage",   s.voltage, minV or 0, maxV or 0, COLOR.green,
       wgt.minVoltage and ("min " .. fmt(wgt.minVoltage, 1) .. "v") },
   }
-  local durationText = fmtTime(#s.rpm * s.interval)
+  local durationSec = #s.rpm * s.interval
   for i = 1, 3 do
     local g = graphs[i]
     local gx = pad + (i - 1) * (gw + gGap)
     drawChamferedRect(gx, gy, gw, gh, COLOR.panel, COLOR.bg, 6)
     drawTab(gx + 2, gy + 1, gw - 4, TAB_LABEL_H, g[1], nil, g[6])
-    local cx, cy = gx + 10, gy + TAB_LABEL_H + 10
-    local cw, ch = gw - 20, gh - TAB_LABEL_H - 10 - 22
-    drawSeriesChart(cx, cy, cw, ch, g[2], g[3], g[4], g[5])
-    lcd.drawText(cx, cy + ch + 10, "0:00", LEFT + VCENTER + SMLSIZE + COLOR.muted)
-    lcd.drawText(cx + cw, cy + ch + 10, durationText, RIGHT + VCENTER + SMLSIZE + COLOR.muted)
+    -- 16px under the label row so the top value label (centered on the
+    -- top grid line) clears it; 28px at the bottom for the time labels.
+    local cx, cy = gx + 8, gy + TAB_LABEL_H + 16
+    local cw, ch = gw - 18, gh - TAB_LABEL_H - 16 - 28
+    if not statsFresh then
+      wgt.chartCache = wgt.chartCache or {}
+      wgt.chartCache[i] = wgt.chartCache[i] or {}
+      drawSeriesChart(cx, cy, cw, ch, g[2], g[3], g[4], g[5], durationSec, wgt.chartCache[i])
+    end
   end
 end
 
@@ -1806,6 +1904,31 @@ local function drawLarge(wgt, t, w, h)
   -- squeezing any row.
   local pad = 12
 
+  -- Which of the 4 screens (standby / flight log / arm warning /
+  -- dashboard) to draw. When it differs from last refresh, kick off the
+  -- same wipe-reveal animation - one mechanism for every transition.
+  local nowConnected = isTelemetryConnected(t)
+  local screenType
+  if not nowConnected then
+    screenType = wgt.showFlightLog and "flightlog" or "standby"
+  elseif wgt.armWarningActive then
+    screenType = "armwarning"
+  else
+    screenType = "dashboard"
+  end
+  if wgt.lastScreenType and wgt.lastScreenType ~= screenType then
+    wgt.screenTransitionTime = getTime()
+  end
+  wgt.lastScreenType = screenType
+
+  -- Standby has no top bar: its own panels already show the clock and the
+  -- TX battery, so it uses the whole screen from the top padding down.
+  if screenType == "standby" then
+    drawStandby(wgt, pad, w, h)
+    drawTransitionOverlay(wgt, w, h)
+    return
+  end
+
   -- Row 0: top bar - Signal on the left, transmitter (TX16S) battery
   -- icon on the right. The TX battery icon is colour-only (same vivid
   -- green/yellow/red as the model battery bar) - no label, voltage, or
@@ -1849,40 +1972,10 @@ local function drawLarge(wgt, t, w, h)
     end
   end
 
-  -- No telemetry link -> standby screen instead of a dashboard full of
-  -- "--"/"0" placeholders (Arm/Motor included, since both are derived
-  -- from the model's telemetry too). The top bar drawn so far (clock,
-  -- signal, TX battery) stays visible above this, since none of that
-  -- depends on the model's telemetry link.
-  local nowConnected = isTelemetryConnected(t)
-
-  -- Generic screen-change transition: whichever of the 4 possible
-  -- screens (standby / flight log / arm warning / dashboard) is about
-  -- to be drawn, if it's different from last refresh, kick off the
-  -- same wipe-reveal animation - one mechanism for every transition,
-  -- not just the reconnect case this started out covering.
-  local screenType
-  if not nowConnected then
-    screenType = wgt.showFlightLog and "flightlog" or "standby"
-  elseif wgt.armWarningActive then
-    screenType = "armwarning"
-  else
-    screenType = "dashboard"
-  end
-  if wgt.lastScreenType and wgt.lastScreenType ~= screenType then
-    wgt.screenTransitionTime = getTime()
-  end
-  wgt.lastScreenType = screenType
-
-  if not nowConnected then
-    -- Right after a disconnect, show the flight summary first; a tap
-    -- (handled in refresh()) switches to the plain standby screen for
-    -- the rest of this disconnect period.
-    if wgt.showFlightLog then
-      drawFlightLog(wgt, topBarY + topBarH + pad, w, h)
-    else
-      drawStandby(wgt, topBarY + topBarH + pad, w, h)
-    end
+  -- Right after a disconnect: the flight summary, under the top bar
+  -- (standby was handled above, before the top bar).
+  if screenType == "flightlog" then
+    drawFlightLog(wgt, topBarY + topBarH + pad, w, h)
     drawTransitionOverlay(wgt, w, h)
     return
   end
