@@ -102,6 +102,7 @@ RFTelem/
 - `Theme`: `0`=color / `1`=mono / `2`=cyan (EdgeTX のウィジェットオプションには文字列選択が無いため数値指定)
 - `Mute`: 消音に使うソース (スイッチ SA など、または論理スイッチ)。値が 0 より大きい間 (スイッチ下 / LS 真)
   音声と注意の振動を止める。危険の振動は止めない。空欄なら消音しない
+- `Voice`: アラームの声。`0`=No.7 アナウンス / `1`=青山龍星 / `2`=玄野武宏 / `3`=冥鳴ひまり / `4`=Voidoll / `5`=ずんだもん
 
 ## アラーム (音声 + 振動)
 
@@ -113,7 +114,8 @@ RFTelem/
 | 注意 | 短く 1 回 | 1 回 | セル電圧 < 3.60V (2 秒継続)、ESC ≥ 80℃、残量 30% / 20%、飛行時間 (`flightTimeSec`、既定オフ)、ARM 不可 (ARMD ≠ 0) |
 | 情報 | なし | 変化時 | 接続 / 切断、ARM / DISARM・バンク (RTE#)・プロファイル (PID#) (この 3 つは接続直後にも現在値)、ガバナー状態、残量 10% 刻み |
 
-- 音声ファイルは `sdcard/SOUNDS/rf/` (VOICEVOX で生成。[docs/voicevox_script.md](docs/voicevox_script.md))
+- 音声ファイルは `sdcard/SOUNDS/rf/<声>/` (VOICEVOX で 6 種類生成。[docs/voicevox_script.md](docs/voicevox_script.md))。
+  以前の版で SD 直下 `/SOUNDS/rf/*.wav` に置いたファイルはもう使わない (deploy.ps1 は削除しないので手で消してよい)
 - 案C (EdgeTX 標準機能でのバックアップ): [docs/alarms_native.md](docs/alarms_native.md)。設定したら `CONFIG.alarm.nativeBackup = true`
 - 振動の有無・`playHaptic` の単位は TX16S MK3 で未確認
 

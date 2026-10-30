@@ -273,10 +273,13 @@ local CONFIG = {
   simulate = false,
 
   -- Voice + haptic alarms (see ALARMS below). Voice files are
-  -- <dir><name>.wav, generated from tools/voice/voices.csv.
+  -- <dir><voice set>/<name>.wav, generated from tools/voice/voices.csv
+  -- for every set in tools/voice/voicesets.csv (same order as here).
+  -- The radio-side "Voice" option picks the set: 0 = first entry.
   alarm = {
     enabled     = true,
     dir         = "/SOUNDS/rf/",
+    voiceSets   = { "no7", "ryusei", "takehiro", "himari", "voidoll", "zundamon" },
     repeatSec   = 10,    -- critical alarms repeat this often while active
     cellCaution = 3.60,  -- V/cell, sustained cellSustainSec (rotor spinning)
     cellCritical = 3.50,
@@ -2055,11 +2058,21 @@ local function playPattern(pattern)
   for i = 1, #pattern do playHaptic(pattern[i][1], pattern[i][2]) end
 end
 
+-- Folder of the voice set chosen with the "Voice" option (0-based index
+-- into CONFIG.alarm.voiceSets; out of range falls back to the first set).
+local function voiceSetDir(wgt)
+  local sets = CONFIG.alarm.voiceSets
+  local idx = wgt.options and wgt.options.Voice
+  idx = idx and math.floor(idx) or 0
+  return sets[idx + 1] or sets[1]
+end
+
 local function alert(wgt, tier, voice)
   local cfg = CONFIG.alarm
   local muted = wgt.alarmMuted
-  if CONFIG.simulate then print("RFTelem alarm: " .. tier .. " " .. tostring(voice) .. (muted and " (muted)" or "")) end
-  if voice and not muted and playFile then playFile(cfg.dir .. voice .. ".wav") end
+  local path = voice and (cfg.dir .. voiceSetDir(wgt) .. "/" .. voice .. ".wav")
+  if CONFIG.simulate then print("RFTelem alarm: " .. tier .. " " .. tostring(path) .. (muted and " (muted)" or "")) end
+  if path and not muted and playFile then playFile(path) end
   if tier == "critical" then
     playPattern(cfg.hapticCritical)
   elseif tier == "caution" and not muted then
@@ -2324,9 +2337,13 @@ end
 -- "Mute" picks any source (e.g. switch SA, or a logical switch): voice
 -- alarms are silenced while its value is > 0 (switch down / LS true).
 -- Leave it empty for never-muted. The critical haptic is never muted.
+-- "Voice" picks the alarm voice set (index into CONFIG.alarm.voiceSets):
+-- 0=No.7 announce, 1=Aoyama Ryusei, 2=Kurono Takehiro, 3=Meimei Himari,
+-- 4=Voidoll, 5=Zundamon.
 local options = {
   { "Theme", VALUE, 0, 0, 2 }, -- 0=color, 1=mono, 2=cyan
   { "Mute", SOURCE, 0 },
+  { "Voice", VALUE, 0, 0, 5 },
 }
 
 return {

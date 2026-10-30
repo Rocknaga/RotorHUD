@@ -1,21 +1,34 @@
 # 音声ファイル (VOICEVOX)
 
-台本の正本は [tools/voice/voices.csv](../tools/voice/voices.csv) (`file,group,text`)。
-このファイルを直して、スクリプトで一括生成する。手作業での書き出しは不要。
+台本の正本は [tools/voice/voices.csv](../tools/voice/voices.csv) (`file,group,text`)、
+声の一覧は [tools/voice/voicesets.csv](../tools/voice/voicesets.csv) (`index,set,speaker,speed,label`)。
+これを直して、スクリプトで一括生成する。手作業での書き出しは不要。
 
 ```powershell
-# 全ファイル生成 (VOICEVOX エンジンが起動していなければ自動で起動する)
+# 全ての声 × 全ファイル生成 (VOICEVOX エンジンが起動していなければ自動で起動する)
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1
-# 一部だけ作り直す / 話者を変える / 話者一覧
+# 声を絞る / ファイルを絞る / 話者 ID の一覧
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1 -Set no7,ryusei
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1 -Only gov_active,armed
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1 -Speaker 30 -SpeedScale 1.15
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1 -ListSpeakers
 ```
 
-- 出力: `sdcard/SOUNDS/rf/<file>.wav` (32 kHz / 16 bit / モノラル PCM)。deploy.ps1 で SD へコピーされる
-- 既定の話者: **No.7 / アナウンス (ID 30)**、話速 1.15
+- 出力: `sdcard/SOUNDS/rf/<set>/<file>.wav` (32 kHz / 16 bit / モノラル PCM)。deploy.ps1 で SD へコピーされる
+- ウィジェットのオプション **Voice** (0〜5) で声を選ぶ。`CONFIG.alarm.voiceSets` の並びは voicesets.csv の index と一致させる
+
+| Voice | フォルダ | 話者 (VOICEVOX スタイル ID) |
+|---|---|---|
+| 0 | no7 | No.7 / アナウンス (30) — 既定 |
+| 1 | ryusei | 青山龍星 / ノーマル (13) |
+| 2 | takehiro | 玄野武宏 / ノーマル (11) |
+| 3 | himari | 冥鳴ひまり / ノーマル (14) |
+| 4 | voidoll | Voidoll / ノーマル (89) |
+| 5 | zundamon | ずんだもん / ノーマル (3) |
+
+声を増やすときは voicesets.csv に行を足し、main.lua の `voiceSets` と `options` の Voice の最大値を合わせる。
 - 読み: VOICEVOX が英字を読めないものはカタカナにしてある (ESC→イーエスシー、BEC→ビーイーシー、PID→ピーアイディー)
-- 利用規約: キャラクターごとの規約に従う。公開する場合は「VOICEVOX:No.7」などのクレジットが必要
+- 利用規約: キャラクターごとの規約に従う。公開する場合は「VOICEVOX:No.7」「VOICEVOX:青山龍星」
+  「VOICEVOX:玄野武宏」「VOICEVOX:冥鳴ひまり」「VOICEVOX:Voidoll」「VOICEVOX:ずんだもん」のクレジットが必要
 
 ## グループと鳴るタイミング (main.lua の ALARMS)
 

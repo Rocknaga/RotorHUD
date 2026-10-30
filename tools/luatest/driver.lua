@@ -1,6 +1,7 @@
 -- EdgeTX API stubs + scenario driver for RFTelem (CONFIG.simulate = true).
 -- ARGS: "mute" -> Mute source active 30..60s, "bg" -> background() only 40..60s,
---       "draw" -> report out-of-screen draw calls.
+--       "draw" -> report out-of-screen draw calls, "voiceN" -> Voice option N,
+--       "droplink" / "lowbatt" / "native" / "armdthr" / "fallback" -> scenario patches.
 NOW = 0
 local opts = {}
 for a in string.gmatch(ARGS or "", "%S+") do opts[a] = true end
@@ -84,7 +85,13 @@ if opts.fallback then
 end
 local chunk = assert(load(src, "main.lua"))
 local widget = chunk()
-local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 }, { Theme = 0, Mute = 999 })
+-- "voiceN" -> Voice option N (alarm voice set)
+local voiceOpt = 0
+for a in pairs(opts) do
+  local n = a:match("^voice(%d+)$")
+  if n then voiceOpt = tonumber(n) end
+end
+local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 }, { Theme = 0, Mute = 999, Voice = voiceOpt })
 
 local screens = {}
 for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit

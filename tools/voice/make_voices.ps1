@@ -3,15 +3,16 @@
   Generates the RFTelem voice files with the local VOICEVOX engine.
 
 .DESCRIPTION
-  Reads tools\voice\voices.csv (file,group,text) and writes one WAV per row
-  to sdcard\SOUNDS\rf\<file>.wav as 32 kHz / 16-bit / mono PCM (set through
-  the engine's outputSamplingRate/outputStereo, so no ffmpeg is needed).
+  Reads tools\voice\voices.csv (file,group,text) and, for each voice set in
+  tools\voice\voicesets.csv (index,set,speaker,speed,label), writes one WAV
+  per row to sdcard\SOUNDS\rf\<set>\<file>.wav as 32 kHz / 16-bit / mono PCM
+  (set through the engine's outputSamplingRate/outputStereo, so no ffmpeg is
+  needed). The widget's "Voice" option picks the set by its index.
   Starts C:\Program Files\VOICEVOX\vv-engine\run.exe hidden if the engine
   is not already listening on 127.0.0.1:50021.
 
-.PARAMETER Speaker
-  VOICEVOX style id. Default 30 = No.7 / announce. List them with
-  -ListSpeakers.
+.PARAMETER Set
+  Voice set names to generate (e.g. -Set no7,ryusei). Default: all sets.
 
 .PARAMETER Only
   Generate only these file names (e.g. -Only gov_active,armed).
@@ -22,8 +23,7 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$Speaker = 30,
-    [double]$SpeedScale = 1.15,
+    [string[]]$Set,
     [string[]]$Only,
     [switch]$ListSpeakers,
     [string]$EngineExe = 'C:\Program Files\VOICEVOX\vv-engine\run.exe'
@@ -32,7 +32,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $root   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $csv    = Join-Path $PSScriptRoot 'voices.csv'
-$outDir = Join-Path $root 'sdcard\SOUNDS\rf'
+$setCsv = Join-Path $PSScriptRoot 'voicesets.csv'
+$outRoot = Join-Path $root 'sdcard\SOUNDS\rf'
 $base   = 'http://127.0.0.1:50021'
 $utf8   = New-Object System.Text.UTF8Encoding $false
 
@@ -72,26 +73,30 @@ if ($ListSpeakers) {
     return
 }
 
-New-Item -ItemType Directory -Force $outDir | Out-Null
-$rows = Import-Csv -LiteralPath $csv -Encoding UTF8
-# "-Only a,b" arrives as one string when the script is run with -File.
-if ($Only) {
-    $names = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() })
-    $rows = $rows | Where-Object { $names -contains $_.file }
-}
+# "-Only a,b" / "-Set a,b" arrive as one string when run with -File.
+function Split-List($list) { @($list | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
 
-foreach ($row in $rows) {
-    $q = '/audio_query?speaker={0}&text={1}' -f $Speaker, [uri]::EscapeDataString($row.text)
-    $query = $utf8.GetString((Invoke-Engine 'POST' $q $null)) | ConvertFrom-Json
-    $query.outputSamplingRate = 32000
-    $query.outputStereo = $false
-    $query.speedScale = $SpeedScale
-    $query.prePhonemeLength = 0.05
-    $query.postPhonemeLength = 0.05
-    $body = $utf8.GetBytes(($query | ConvertTo-Json -Depth 20 -Compress))
-    $wav = Invoke-Engine 'POST' "/synthesis?speaker=$Speaker" $body
-    $path = Join-Path $outDir ($row.file + '.wav')
-    [System.IO.File]::WriteAllBytes($path, $wav)
-    Write-Host ('{0,-16} {1,7} bytes  {2}' -f $row.file, $wav.Length, $row.text)
+$rows = Import-Csv -LiteralPath $csv -Encoding UTF8
+if ($Only) { $names = Split-List $Only; $rows = $rows | Where-Object { $names -contains $_.file } }
+$sets = Import-Csv -LiteralPath $setCsv -Encoding UTF8
+if ($Set) { $wanted = Split-List $Set; $sets = $sets | Where-Object { $wanted -contains $_.set } }
+if (-not $sets) { throw "No matching voice set in $setCsv" }
+
+foreach ($vs in $sets) {
+    $outDir = Join-Path $outRoot $vs.set
+    New-Item -ItemType Directory -Force $outDir | Out-Null
+    Write-Host "== [$($vs.index)] $($vs.set): $($vs.label) (speaker $($vs.speaker), speed $($vs.speed))"
+    foreach ($row in $rows) {
+        $q = '/audio_query?speaker={0}&text={1}' -f $vs.speaker, [uri]::EscapeDataString($row.text)
+        $query = $utf8.GetString((Invoke-Engine 'POST' $q $null)) | ConvertFrom-Json
+        $query.outputSamplingRate = 32000
+        $query.outputStereo = $false
+        $query.speedScale = [double]$vs.speed
+        $query.prePhonemeLength = 0.05
+        $query.postPhonemeLength = 0.05
+        $body = $utf8.GetBytes(($query | ConvertTo-Json -Depth 20 -Compress))
+        $wav = Invoke-Engine 'POST' "/synthesis?speaker=$($vs.speaker)" $body
+        [System.IO.File]::WriteAllBytes((Join-Path $outDir ($row.file + '.wav')), $wav)
+    }
+    Write-Host "   $(@($rows).Count) file(s) -> $outDir"
 }
-Write-Host "Done: $(@($rows).Count) file(s) in $outDir"
