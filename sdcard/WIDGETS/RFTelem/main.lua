@@ -2816,6 +2816,13 @@ local function tick(wgt)
     end
   end
   wgt.closeWasOn = closeOn
+
+  -- "BattPrev" option: same, one profile back. Keys and the side wheel
+  -- can't be sources, but trim buttons can drive a logical switch (e.g.
+  -- T5 down -> L10 -> BattPrev, T5 up -> L11 -> Close).
+  local prevOn = sourceActive(wgt.options and wgt.options.BattPrev)
+  if prevOn and not wgt.prevWasOn and connected then bpStep(wgt, -1) end
+  wgt.prevWasOn = prevOn
   return t, connected
 end
 
@@ -2910,6 +2917,8 @@ end
 -- "BattSel" (optional) picks the battery profile with a multi-position
 -- source - e.g. the TX16S 6-pos buttons: button N = profile N, applied 3s
 -- after connecting. Works without full-screen mode.
+-- "BattPrev" (optional) steps the picker back one profile ("Close" steps
+-- forward) - meant for a trim button through a logical switch.
 local options = {
   { "Theme", VALUE, 0, 0, 2 }, -- 0=color, 1=mono, 2=cyan
   { "Mute", SOURCE, 0 },
@@ -2917,6 +2926,7 @@ local options = {
   { "Close", SOURCE, 0 },
   { "BattLand", VALUE, 20, 10, 50 },
   { "BattSel", SOURCE, 0 },
+  { "BattPrev", SOURCE, 0 },
 }
 
 return {

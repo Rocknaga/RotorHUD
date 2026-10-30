@@ -72,6 +72,8 @@ getValue = function(src)
   if src == 999 then return muteVal end
   -- "selN": BattSel source = 6-pos switch at position N (EdgeTX 6POS values)
   if src == 997 then return ({ -1024, -614, -205, 205, 614, 1024 })[selOpt] or 0 end
+  -- "bpprev": BattPrev pressed once at 13.0s (picker 12..17s): 1 -> 6
+  if src == 996 then return (opts.bpprev and NOW >= 1300 and NOW < 1320) and 1024 or -1024 end
   -- "close": Close switch pressed for 0.5s at 90s (flight log is up 75..135s)
   -- "bpstep": pressed at 13.0s and 13.5s (battery-profile picker, 12..17s)
   if src == 998 then
@@ -132,7 +134,7 @@ for a in pairs(opts) do
 end
 local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 },
   { Theme = 0, Mute = 999, Voice = voiceOpt, Close = 998, BattLand = landOpt,
-    BattSel = selOpt and 997 or 0 })
+    BattSel = selOpt and 997 or 0, BattPrev = 996 })
 wgtRef = wgt
 
 -- Lua instructions per refresh() (EdgeTX aborts a frame with "CPU limit"
