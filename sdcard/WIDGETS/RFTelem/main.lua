@@ -1695,9 +1695,9 @@ local function drawArmSwitchWarning(y, w, h, armdValue)
     local names = {}
     for i = 1, #reasons do names[i] = reasons[i][2] end
     local reasonText = (#names > 0) and table.concat(names, " / ") or "unknown"
-    lcd.drawText(cx, cy + 62, reasonText,
+    lcd.drawText(cx, cy + 74, reasonText,
       CENTER + VCENTER + fitFontMeasured(w - 60, 42, reasonText, MIDSIZE) + COLOR.white)
-    lcd.drawText(cx, cy + 96, "code " .. fmt(armdValue, 0),
+    lcd.drawText(cx, cy + 110, "code " .. fmt(armdValue, 0),
       CENTER + VCENTER + SMLSIZE + COLOR.dim)
   end
 end
