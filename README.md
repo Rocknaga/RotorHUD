@@ -122,6 +122,8 @@ RFTelem/
 機体と接続し、DISARM で ARM 警告が無ければ、FC の 6 つのバッテリープロファイルから選ぶ画面を出す。
 - 全画面表示: タイルをタップで即決定 / ダイヤルで移動・Enter で決定 / RTN で閉じる
 - 全画面でない: `Close` のスイッチを押すたびに次へ。3 秒押さなければ決定
+- **オプション `BattSel`** に多段スイッチ等を割り当てると、その位置で直接選ぶ (6 ポジションボタン N = プロファイル N。
+  ダイヤル/スライダーは 6 等分)。電源投入前にボタンを選んでおけば、接続後に操作なしで自動送信される
 - 15 秒操作が無ければ現在のまま閉じる。ARM したら即閉じる (ARM 中は送信しない)
 - 決定すると `MSP_SET_BATTERY_PROFILE` (176) を CRSF で送り、`BAT#` センサーが変わったら成功
   (「バッテリープロファイル、N」)。2 秒ごとに再送、3 回で失敗 (「変更できませんでした」)
@@ -129,6 +131,7 @@ RFTelem/
 - タイルの名前は `CONFIG.batteryProfile.labels` で変えられる (例 "6S 5000")。無効化は `enabled = false`
 - 根拠 (ソース確認): [docs/rotorflight_notes.md](docs/rotorflight_notes.md)。**実機の FC では未検証**
 - `BattLand`: 着陸指示を出す残量 % (10〜50、既定 20)
+- `BattSel`: バッテリープロファイルを選ぶソース (6 ポジションボタンなど。空欄なら使わない)
 - `Voice`: アラームの声。`0`=No.7 アナウンス / `1`=青山龍星 / `2`=玄野武宏 / `3`=冥鳴ひまり / `4`=Voidoll / `5`=ずんだもん
 
 ## アラーム (音声 + 振動)
@@ -141,6 +144,10 @@ RFTelem/
 | 注意 | 短く 1 回 | 1 回 | 残量 ≤ `BattLand` + 10%、セル電圧 < 3.60V (2 秒継続)、ESC ≥ 80℃、飛行時間 (`flightTimeSec`、既定オフ)、ARM 不可 (ARMD ≠ 0) |
 | 情報 | なし | 変化時 | 接続 / 切断、ARM / DISARM・バンク (RTE#)・プロファイル (PID#) (この 3 つは接続直後にも現在値)、ガバナー状態、残量 10% 刻み |
 
+- 接続・切断は EdgeTX 本体が読み上げるので、ウィジェットは言わない (`CONFIG.alarm.edgetxLinkVoice = true`)。
+  接続直後のウィジェットの報告 (ARM・バンク・プロファイル・バッテリープロファイル・選択案内) は
+  本体の音声と重ならないよう 3 秒遅らせる (`connectQuietSec`)。回転中の切断は振動のみ。
+  本体の接続音声を止める設定 (モデルの「テレメトリアラーム無効」) は RSSI/RQly 低下警告も止めるので使わない
 - 音声ファイルは `sdcard/SOUNDS/rf/<声>/` (VOICEVOX で 6 種類生成。[docs/voicevox_script.md](docs/voicevox_script.md))。
   以前の版で SD 直下 `/SOUNDS/rf/*.wav` に置いたファイルはもう使わない (deploy.ps1 は削除しないので手で消してよい)
 - 案C (EdgeTX 標準機能でのバックアップ): [docs/alarms_native.md](docs/alarms_native.md)。設定したら `CONFIG.alarm.nativeBackup = true`

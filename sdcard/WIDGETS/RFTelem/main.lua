@@ -308,6 +308,15 @@ local CONFIG = {
     -- haptic.
     battLand    = 20,
     battRepeatSec = 20, -- the land-now call repeats this often (haptic + voice)
+    -- EdgeTX speaks telemetry connected / back / lost itself (telemetry/
+    -- telemetry.cpp, unless the model's "disable telemetry alarms" is set -
+    -- which would also drop its RSSI/RQly warnings). While true the widget
+    -- leaves those calls to EdgeTX (a link lost in flight still gets the
+    -- critical haptic) and holds its own connect reports (arm, bank,
+    -- profile, battery profile, picker) for connectQuietSec so they come
+    -- after the system voice instead of on top of it.
+    edgetxLinkVoice = true,
+    connectQuietSec = 3,
     escCaution  = 80,    -- deg C
     escCritical = 90,
     escHyst     = 5,
@@ -1976,7 +1985,10 @@ local function drawBattSelect(wgt, t, y, w, h)
   local hint
   if bp.phase == "pick" then
     local left = cfg.timeoutSec - math.floor((now - (bp.lastInput or bp.since)) / 100)
-    if bp.stepped then
+    if bp.stepped and bp.srcLast then
+      left = cfg.applyIdleSec - math.floor((now - bp.lastInput) / 100)
+      hint = "Selector: profile " .. bp.sel .. "  -  applies in " .. math.max(0, left) .. "s  -  move it to change"
+    elseif bp.stepped then
       left = cfg.applyIdleSec - math.floor((now - bp.lastInput) / 100)
       hint = "Applies " .. bp.sel .. " in " .. math.max(0, left) .. "s  -  press again for the next"
     elseif touchHint() then
@@ -2475,6 +2487,9 @@ end
 local function onChange(a, key, value, fn)
   if value == nil then return end
   local old = a.prev[key]
+  -- Connect reports wait out a.quietUntil (EdgeTX's own link voice);
+  -- prev stays unset meanwhile, so the first value is still said after.
+  if old == nil and a.sayFirst[key] and getTime() < (a.quietUntil or 0) then return end
   a.prev[key] = value
   if (old ~= nil and old ~= value) or (old == nil and a.sayFirst[key]) then
     a.sayFirst[key] = nil
@@ -2502,13 +2517,18 @@ local function runAlarms(wgt, t, running, connected)
   -- "disconnected". Nothing at power-up when there was never a link.
   -- wgt.alarmLink lives outside wgt.alarm, which is reset on reconnect.
   if connected ~= wgt.alarmLink then
+    local own = not cfg.edgetxLinkVoice -- false: EdgeTX already says it
     if connected then
-      alert(wgt, "info", "connected")
+      if own then alert(wgt, "info", "connected") end
       a.sayFirst.arm, a.sayFirst.armd, a.sayFirst.bank, a.sayFirst.pid = true, true, true, true
       a.sayFirst.battprof = true
+      a.quietUntil = getTime() + (cfg.edgetxLinkVoice and cfg.connectQuietSec * 100 or 0)
     elseif wgt.alarmLink ~= nil then
-      alert(wgt, wgt.wasRunning and "critical" or "info",
-        wgt.wasRunning and "telemetry_lost" or "disconnected")
+      if wgt.wasRunning then
+        alert(wgt, "critical", own and "telemetry_lost" or {}) -- haptic either way
+      elseif own then
+        alert(wgt, "info", "disconnected")
+      end
     end
     wgt.alarmLink = connected
   end
@@ -2657,6 +2677,17 @@ local function bpApply(wgt, t)
   end
 end
 
+-- "BattSel" option: a multi-position source (the TX16S 6-pos buttons, a
+-- pot, a slider) picks the profile directly - its -1024..1024 range is cut
+-- into 6 equal bands (1..6). Nil when the option is unset.
+local function bpSourceProfile(wgt)
+  local src = wgt.options and wgt.options.BattSel
+  if not src or src == 0 then return nil end
+  local ok, v = pcall(getValue, src)
+  if not ok or type(v) ~= "number" then return nil end
+  return math.max(1, math.min(6, math.floor((v + 1024) / 2048 * 6) + 1))
+end
+
 -- Inputs: step (switch press / rotary), choose (tap / Enter), dismiss.
 local function bpStep(wgt, dir)
   local bp = wgt.bp
@@ -2683,8 +2714,8 @@ local function bpUpdate(wgt, t, connected)
   if not connected or armed then wgt.bp = nil; return end
 
   if bp.phase == "wait" then
-    if wgt.armWarningActive then
-      bp.since = now -- arm switch still on etc.: ask once that's cleared
+    if wgt.armWarningActive or now < (wgt.alarm.quietUntil or 0) then
+      bp.since = now -- arm switch still on / EdgeTX link voice: ask after
     elseif t.battProfile then
       bp.phase, bp.sel, bp.since, bp.lastInput = "pick", t.battProfile, now, nil
       alert(wgt, "info", "battprofile_select")
@@ -2692,6 +2723,13 @@ local function bpUpdate(wgt, t, connected)
       wgt.bp = nil -- no BAT# sensor: firmware/telemetry without profiles
     end
   elseif bp.phase == "pick" then
+    -- Selector source: its position is the choice. Read on entry too, so a
+    -- 6-pos button set before power-up is applied applyIdleSec after the
+    -- link comes up without touching anything (same profile -> "same").
+    local sp = bpSourceProfile(wgt)
+    if sp and sp ~= bp.srcLast then
+      bp.srcLast, bp.sel, bp.lastInput, bp.stepped = sp, sp, now, true
+    end
     if bp.stepped and now - bp.lastInput >= cfg.applyIdleSec * 100 then
       bpApply(wgt, t)
     elseif now - (bp.lastInput or bp.since) >= cfg.timeoutSec * 100 then
@@ -2869,12 +2907,16 @@ end
 -- flight log when pressed - works even when the widget isn't full-screen.
 -- "BattLand" is the remaining-% that triggers the repeating "battery NN%,
 -- land now" alarm (10-50, default 20).
+-- "BattSel" (optional) picks the battery profile with a multi-position
+-- source - e.g. the TX16S 6-pos buttons: button N = profile N, applied 3s
+-- after connecting. Works without full-screen mode.
 local options = {
   { "Theme", VALUE, 0, 0, 2 }, -- 0=color, 1=mono, 2=cyan
   { "Mute", SOURCE, 0 },
   { "Voice", VALUE, 0, 0, 5 },
   { "Close", SOURCE, 0 },
   { "BattLand", VALUE, 20, 10, 50 },
+  { "BattSel", SOURCE, 0 },
 }
 
 return {
