@@ -80,16 +80,18 @@
 - 閉じ方: タイトル帯の Close ボタン (タップ、全画面時のみ) / Enter (全画面時のみ) /
   オプション `Close` のスイッチ (立ち上がりで閉じる。`tick` で判定するので全画面でなくても効く) / 60 秒経過
 
-- タイトル帯 (Flight log / 機体名 / 自動終了までの残り秒) → 4 タブ × 2 段 (`drawTab`) → グラフ 3 枚
+- タイトル帯 (Flight log / 機体名 / Close ボタン) → 4 タブ × 2 段 (`drawTab`) → 統合折れ線グラフ 1 枚
 - 上段: Flight time / Max rpm (avg) / Max amps (avg) / Max power (V×A の最大)
 - 下段: Used mAh (残量%) / Min volt (最小セル電圧) / Min Bec / Max ESC
 - グラフ: Headspeed / Current / Voltage。`updateFlightSamples` がローター回転中だけ 1 秒ごとに記録
   (`wgt.samples`)。400 点を超えたら隣同士を平均して半分にし、間隔を倍にする (メモリ固定)。
-  横軸は回転していた時間。描画は 2px 幅の矩形を並べた面グラフ (`drawSeriesChart`)
-- 見出しの max/min はフレーム毎のトラッカー値 (タブと一致)。グラフの縦軸スケールだけサンプルから決める
-- 目盛り: 縦軸は 1/2/5×10^n の刻みで約 4 区切り (左 40px に数値、線は背景に実線 + 塗りの上に切れ目)、
-  横軸は 5s〜1h の刻みから 3 区切り以下になるものを m:ss で
-- 負荷対策 (CPU limit): サンプルの集計 (`flightSampleStats`) と各列の高さ (`wgt.chartCache`) は
+  横軸は回転していた時間
+- グラフ (`drawFlightChart`): 3 系列を 1 枚に重ねた 2px の折れ線 (`lcd.drawLine`、シミュレータで動作確認済み。
+  無ければ 2×2 の点)。各系列を `chartAxis` で 4 区切りの軸に合わせ、目盛り線は共通。
+  目盛り数字は左に Headspeed、右に Current と Voltage を各系列の色で。刻みは 1/1.2/1.5/2/2.5/3/4/5/6/8×10^n。
+  凡例はラベル行 (色 + 名前 + max/min。max/min はトラッカー値でタブと一致)
+- 横軸: 5s〜1h の刻みから 3 区切り以下になるものを m:ss で
+- 負荷対策 (CPU limit): サンプルの集計 (`flightSampleStats`) と折れ線の頂点 (`wgt.chartCache`、8px ごと) は
   サンプルが変わるまでキャッシュ。集計したフレームはグラフ本体を描かず次フレームに回す
 - 再接続時に `resetTelemetryState` がサンプルも初期化
 

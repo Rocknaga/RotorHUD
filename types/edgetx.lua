@@ -187,3 +187,10 @@ function lcd.getBitmapSize(bitmap) end
 ---@return integer width
 ---@return integer height
 function lcd.sizeText(text, flags) end
+
+--- Straight line. Confirmed working in the Companion 2.12 TX16S MK3
+--- simulator (flight-log chart); not yet seen on the radio itself.
+---@param pattern integer SOLID / DOTTED
+---@param flags integer color
+function lcd.drawLine(x1, y1, x2, y2, pattern, flags) end
+SOLID = nil

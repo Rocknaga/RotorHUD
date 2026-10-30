@@ -29,6 +29,7 @@ LEFT, RIGHT, CENTER, VCENTER = 0, 0x10, 0x20, 0x40
 SMLSIZE, MIDSIZE, DBLSIZE, XXLSIZE = 0x300, 0x400, 0x500, 0x600
 VALUE, SOURCE, BOOL, COLOR_T = 0, 1, 2, 3
 EVT_TOUCH_TAP = 0x1000
+SOLID = 0
 local FONT = { [SMLSIZE] = { 10, 23 }, [MIDSIZE] = { 19, 42 }, [DBLSIZE] = { 25, 55 }, [XXLSIZE] = { 51, 93 } }
 local function fontOf(flags) return FONT[(flags or 0) & 0xF00] or { 12, 27 } end
 
@@ -51,6 +52,7 @@ lcd = {
     chk("text", left, y - f[2] / 2, tw, f[2], tostring(text))
   end,
   drawBitmap = function() end,
+  drawLine = function(x1, y1, x2, y2) chk("line", math.min(x1, x2), math.min(y1, y2), math.abs(x2 - x1), math.abs(y2 - y1)) end,
   sizeText = function(text, flags) local f = fontOf(flags); return #tostring(text) * f[1], f[2] end,
   loadBitmap = function() return nil end,
 }
@@ -58,7 +60,7 @@ lcd = {
 -- widget's own Lua (on the radio lcd.* are C functions).
 if opts.cpu then
   local function noop() end
-  lcd.drawFilledRectangle, lcd.drawText, lcd.drawBitmap = noop, noop, noop
+  lcd.drawFilledRectangle, lcd.drawText, lcd.drawBitmap, lcd.drawLine = noop, noop, noop, noop
   lcd.sizeText = function(text, flags) return #text * 12, 27 end
 end
 Bitmap = { open = function() return nil end }
@@ -95,12 +97,16 @@ end
 local chunk = assert(load(src, "main.lua"))
 local widget = chunk()
 -- "voiceN" -> Voice option N (alarm voice set)
-local voiceOpt = 0
+-- "landNN" -> BattLand option NN (landing alarm %)
+local voiceOpt, landOpt = 0, 20
 for a in pairs(opts) do
   local n = a:match("^voice(%d+)$")
   if n then voiceOpt = tonumber(n) end
+  local l = a:match("^land(%d+)$")
+  if l then landOpt = tonumber(l) end
 end
-local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 }, { Theme = 0, Mute = 999, Voice = voiceOpt, Close = 998 })
+local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 },
+  { Theme = 0, Mute = 999, Voice = voiceOpt, Close = 998, BattLand = landOpt })
 
 -- Lua instructions per refresh() (EdgeTX aborts a frame with "CPU limit"
 -- past a fixed instruction budget). Counted in blocks of 100 via a hook;

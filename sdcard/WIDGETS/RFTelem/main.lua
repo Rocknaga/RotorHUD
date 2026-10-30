@@ -286,9 +286,11 @@ local CONFIG = {
     cellCritical = 3.50,
     cellSustainSec = 2,  -- ignore short sag under load
     cellHyst    = 0.10,  -- must recover this far above the threshold to re-arm
-    battCaution = 30,    -- % remaining: short haptic on the 30/20% voice steps
-    battCaution2 = 20,
-    battCritical = 10,
+    -- % remaining that triggers "battery NN%, land now" (critical,
+    -- repeating). The radio-side "BattLand" option overrides it (10-50).
+    -- The 10% voice step just above it (<= land + 10) gets the caution
+    -- haptic.
+    battLand    = 20,
     escCaution  = 80,    -- deg C
     escCritical = 90,
     escHyst     = 5,
@@ -1633,89 +1635,115 @@ local function flightSampleStats(wgt)
   return c, true
 end
 
--- "Nice" axis step (1/2/5 x 10^n) giving about `count` intervals over range.
-local function niceStep(range, count)
-  if range <= 0 then return 1 end
-  local raw = range / count
-  local mag = 10 ^ math.floor(math.log(raw, 10))
-  local n = raw / mag
-  local step = (n <= 1 and 1) or (n <= 2 and 2) or (n <= 5 and 5) or 10
-  return step * mag
+-- Smallest "nice" number (NICE_MANTISSAS x 10^n) that is >= x. Finer than
+-- plain 1/2/5 so a 2125 rpm peak gets a 0-2400 axis instead of 0-4000.
+local NICE_MANTISSAS = { 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10 }
+local function niceUp(x)
+  if x <= 0 then return 1 end
+  local mag = 10 ^ math.floor(math.log(x, 10))
+  local n = x / mag
+  for i = 1, #NICE_MANTISSAS do
+    if n <= NICE_MANTISSAS[i] + 1e-9 then return NICE_MANTISSAS[i] * mag end
+  end
+  return 10 * mag
+end
+
+-- 4-division axis covering lo..hi with a nice step. fromZero pins the
+-- bottom at 0 (headspeed, current); otherwise the bottom is the step
+-- multiple below lo (pack voltage). All series share the same 4 grid
+-- lines this way, each with its own labels. Returns bottom, step.
+local CHART_DIVS = 4
+local function chartAxis(lo, hi, fromZero)
+  if fromZero then
+    return 0, niceUp(math.max(hi, 1) / CHART_DIVS)
+  end
+  local step = niceUp(math.max(hi - lo, 0.1) / CHART_DIVS)
+  local bottom = math.floor(lo / step) * step
+  while bottom + CHART_DIVS * step < hi do
+    step = niceUp(step * 1.01)
+    bottom = math.floor(lo / step) * step
+  end
+  return bottom, step
 end
 
 -- Time-axis step in seconds: the first of these giving <= 3 intervals,
 -- so the "m:ss" labels (~50px in SMLSIZE) never collide.
 local TIME_STEPS = { 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600 }
 
--- Area chart from plain rectangles (no curve primitives): one 2px column
--- per slice of the series. The value axis is rounded out to nice ticks
--- (labels in a 40px column on the left, grid lines cut through the area
--- in the panel color); the time axis gets m:ss ticks under the baseline.
--- lo/hi are the data range; durationSec is the time the series spans;
--- cache (optional) is a table this chart may keep its column heights in.
-local function drawSeriesChart(x, y, w, h, series, lo, hi, color, durationSec, cache)
-  local n = #series
-  local labelW = 40
-  local px, pw = x + labelW, w - labelW
-  lcd.drawFilledRectangle(px, y + h - 1, pw, 1, COLOR.muted)
-  if n < 2 or hi <= lo then
+-- One chart for every flight series: each a 2px polyline in its color,
+-- scaled to its own 4-division axis (chartAxis) so they share the grid.
+-- Value labels: defs[1] on the left, defs[2] and defs[3] side by side on
+-- the right, each in its series color. m:ss ticks under the baseline.
+--   defs[i] = { series = {...}, bottom = n, step = n, color = c }
+-- Point heights are kept in `cache` until the series or geometry change.
+-- NOTE: EdgeTX stops refresh() with "CPU limit" when a frame runs too many
+-- Lua instructions (a dotted grid once tripped it), so this stays lean.
+local function drawFlightChart(x, y, w, h, defs, durationSec, cache)
+  local labelL, labelR = 46, 90
+  local px, pw = x + labelL, w - labelL - labelR
+  local base, top = y + h - 1, h - 1
+  for q = 1, CHART_DIVS do
+    lcd.drawFilledRectangle(px, base - math.floor(q * top / CHART_DIVS), pw, 1, COLOR.barBg)
+  end
+  lcd.drawFilledRectangle(px, base, pw, 1, COLOR.muted)
+
+  local n = #defs[1].series
+  if n < 2 then
     lcd.drawText(px + pw / 2, y + h / 2, "No data", CENTER + VCENTER + SMLSIZE + COLOR.muted)
     return
   end
 
-  local step = niceStep(hi - lo, 4)
-  local axisLo, axisHi = math.floor(lo / step) * step, math.ceil(hi / step) * step
-  local span = axisHi - axisLo
-  local decimals = (step < 1) and 1 or 0
-  local function tickY(v) return y + h - 1 - math.floor((v - axisLo) / span * (h - 1)) end
-
-  -- Grid behind the area, one solid line per tick (shows where there's
-  -- no data). NOTE: EdgeTX stops refresh() with "CPU limit" when a frame
-  -- runs too many Lua instructions - a dotted version of this grid (~400
-  -- extra rect calls) tripped it in the simulator, so keep it cheap.
-  local g = axisLo + step
-  while g <= axisHi + step / 2 do
-    lcd.drawFilledRectangle(px, tickY(g), pw, 1, COLOR.muted)
-    g = g + step
+  -- Value labels at every grid line
+  local labelX = { px - 6, px + pw + 6, px + pw + 6 + labelR / 2 }
+  local labelFlag = { RIGHT, LEFT, LEFT }
+  for i = 1, #defs do
+    local d = defs[i]
+    local decimals = (d.step ~= math.floor(d.step) or d.bottom ~= math.floor(d.bottom)) and 1 or 0
+    for q = 0, CHART_DIVS do
+      lcd.drawText(labelX[i], base - math.floor(q * top / CHART_DIVS), fmt(d.bottom + q * d.step, decimals),
+        labelFlag[i] + VCENTER + SMLSIZE + d.color)
+    end
   end
 
-  -- Column heights only change when the series or the geometry does, so
-  -- they're computed once and kept in `cache` (the flight log redraws the
-  -- same data every frame for up to a minute).
-  local colW = 2
-  local cols = cache and cache.series == series and cache.n == n and cache.pw == pw
-    and cache.h == h and cache.lo == axisLo and cache.hi == axisHi and cache.cols
-  if not cols then
-    -- Kept lean (locals, no math.min/max calls): this pass runs inside a
-    -- single frame for all three charts.
-    cols = {}
-    local floor, top = math.floor, h - 1
-    local scale, idxStep = top / span, n / pw
-    local k = 0
-    for cx = 0, pw - colW, colW do
-      local bh = (series[floor(cx * idxStep) + 1] - axisLo) * scale
-      if bh < 0 then bh = 0 elseif bh > top then bh = top end
-      k = k + 1
-      cols[k] = floor(bh)
+  -- Polyline points: one every stepX px, computed once per data set.
+  -- 8px (~78 points over ~620px): at 3px the chart alone measured ~26k
+  -- Lua instructions per frame in tools/luatest - CPU limit territory.
+  local stepX = 8
+  local pts = cache and cache.series == defs[1].series and cache.n == n and cache.pw == pw
+    and cache.h == h and cache.key == defs[1].step .. "/" .. defs[2].step .. "/" .. defs[3].bottom and cache.pts
+  if not pts then
+    pts = {}
+    local floor, idxStep = math.floor, n / pw
+    for i = 1, #defs do
+      local d, p, k = defs[i], {}, 0
+      local scale = top / (CHART_DIVS * d.step)
+      for cx = 0, pw - 1, stepX do
+        local v = (d.series[floor(cx * idxStep) + 1] - d.bottom) * scale
+        if v < 0 then v = 0 elseif v > top then v = top end
+        k = k + 1
+        p[k] = base - floor(v)
+      end
+      pts[i] = p
     end
     if cache then
-      cache.series, cache.n, cache.pw, cache.h, cache.lo, cache.hi, cache.cols =
-        series, n, pw, h, axisLo, axisHi, cols
+      cache.series, cache.n, cache.pw, cache.h, cache.pts = defs[1].series, n, pw, h, pts
+      cache.key = defs[1].step .. "/" .. defs[2].step .. "/" .. defs[3].bottom
     end
   end
-  local base = y + h - 1
-  for i = 1, #cols do
-    local bh = cols[i]
-    if bh > 0 then lcd.drawFilledRectangle(px + (i - 1) * colW, base - bh, colW, bh, color) end
-  end
 
-  -- Value ticks: grid line cut through the area + label on the left
-  local v = axisLo
-  while v <= axisHi + step / 2 do
-    local ty = tickY(v)
-    if v > axisLo then lcd.drawFilledRectangle(px, ty, pw, 1, COLOR.panel) end
-    lcd.drawText(px - 6, ty, fmt(v, decimals), RIGHT + VCENTER + SMLSIZE + COLOR.muted)
-    v = v + step
+  -- lcd.drawLine isn't verified on this radio; without it, 2x2 dots.
+  local line = lcd.drawLine
+  for i = 1, #defs do
+    local p, color = pts[i], defs[i].color
+    if line then
+      for k = 2, #p do
+        local x1, x2 = px + (k - 2) * stepX, px + (k - 1) * stepX
+        line(x1, p[k - 1], x2, p[k], SOLID, color)
+        line(x1, p[k - 1] - 1, x2, p[k] - 1, SOLID, color)
+      end
+    else
+      for k = 1, #p do lcd.drawFilledRectangle(px + (k - 1) * stepX, p[k] - 1, 2, 2, color) end
+    end
   end
 
   -- Time ticks under the baseline
@@ -1806,38 +1834,43 @@ local function drawFlightLog(wgt, y, w, h)
     ty = ty + tabH + rowGap
   end
 
-  -- Graphs
+  -- Graph: headspeed, current and pack voltage in one full-width chart.
+  -- Axis scales come from the 1s samples; the legend's max/min come from
+  -- the per-frame trackers, so they match the tabs above exactly.
   local gy = ty - rowGap + pad
   local gh = h - pad - gy
-  local gGap = 8
-  local gw = math.floor((panelW - gGap * 2) / 3)
-  local maxRpm, maxCur, minV, maxV = stats.maxRpm, stats.maxCur, stats.minV, stats.maxV
-  -- Scales come from the 1s samples; the headline numbers come from the
-  -- per-frame trackers, so they match the tabs above exactly.
-  -- drawSeriesChart rounds these out to nice tick values.
-  local graphs = {
-    { "Headspeed", s.rpm,     0, maxRpm, COLOR.accent,
-      wgt.maxHeadspeed and ("max " .. fmt(wgt.maxHeadspeed, 0)) },
-    { "Current",   s.current, 0, maxCur, COLOR.orange,
-      wgt.maxCurrent and ("max " .. fmt(wgt.maxCurrent, 1) .. "A") },
-    { "Voltage",   s.voltage, minV or 0, maxV or 0, COLOR.green,
-      wgt.minVoltage and ("min " .. fmt(wgt.minVoltage, 1) .. "v") },
+  drawChamferedRect(pad, gy, panelW, gh, COLOR.panel, COLOR.bg, 6)
+  local rpmBottom, rpmStep = chartAxis(0, stats.maxRpm, true)
+  local curBottom, curStep = chartAxis(0, stats.maxCur, true)
+  local vBottom, vStep = chartAxis(stats.minV or 0, stats.maxV or 1, false)
+  local defs = {
+    { series = s.rpm,     bottom = rpmBottom, step = rpmStep, color = COLOR.accent,
+      label = "Headspeed", note = wgt.maxHeadspeed and ("max " .. fmt(wgt.maxHeadspeed, 0)) },
+    { series = s.current, bottom = curBottom, step = curStep, color = COLOR.orange,
+      label = "Current A", note = wgt.maxCurrent and ("max " .. fmt(wgt.maxCurrent, 1)) },
+    { series = s.voltage, bottom = vBottom,   step = vStep,   color = COLOR.green,
+      label = "Voltage v", note = wgt.minVoltage and ("min " .. fmt(wgt.minVoltage, 1)) },
   }
-  local durationSec = #s.rpm * s.interval
-  for i = 1, 3 do
-    local g = graphs[i]
-    local gx = pad + (i - 1) * (gw + gGap)
-    drawChamferedRect(gx, gy, gw, gh, COLOR.panel, COLOR.bg, 6)
-    drawTab(gx + 2, gy + 1, gw - 4, TAB_LABEL_H, g[1], nil, g[6])
-    -- 16px under the label row so the top value label (centered on the
-    -- top grid line) clears it; 28px at the bottom for the time labels.
-    local cx, cy = gx + 8, gy + TAB_LABEL_H + 16
-    local cw, ch = gw - 18, gh - TAB_LABEL_H - 16 - 28
-    if not statsFresh then
-      wgt.chartCache = wgt.chartCache or {}
-      wgt.chartCache[i] = wgt.chartCache[i] or {}
-      drawSeriesChart(cx, cy, cw, ch, g[2], g[3], g[4], g[5], durationSec, wgt.chartCache[i])
+  -- Legend in the label row: color key + name + max/min, left to right
+  local lx, ly = pad + 14, gy + 1 + TAB_LABEL_H / 2 + 1
+  for i = 1, #defs do
+    local d = defs[i]
+    lcd.drawFilledRectangle(lx, ly - 4, 14, 8, d.color)
+    lx = lx + 20
+    lcd.drawText(lx, ly, d.label, LEFT + VCENTER + SMLSIZE + COLOR.dim)
+    lx = lx + textWidth(d.label, SMLSIZE) + 8
+    if d.note then
+      lcd.drawText(lx, ly, d.note, LEFT + VCENTER + SMLSIZE + COLOR.muted)
+      lx = lx + textWidth(d.note, SMLSIZE)
     end
+    lx = lx + 26
+  end
+  -- 16px under the label row so the top value labels (centered on the
+  -- top grid line) clear it; 28px at the bottom for the time labels.
+  if not statsFresh then
+    wgt.chartCache = wgt.chartCache or {}
+    drawFlightChart(pad + 8, gy + TAB_LABEL_H + 16, panelW - 16, gh - TAB_LABEL_H - 16 - 28,
+      defs, #s.rpm * s.interval, wgt.chartCache)
   end
 end
 
@@ -2251,21 +2284,25 @@ local function voiceSetDir(wgt)
   return sets[idx + 1] or sets[1]
 end
 
+-- voice: one file name, or a list played in order (e.g. { "batt020", "land" }).
 local function alert(wgt, tier, voice)
   local cfg = CONFIG.alarm
   local muted = wgt.alarmMuted
-  local path = voice and (cfg.dir .. voiceSetDir(wgt) .. "/" .. voice .. ".wav")
-  if CONFIG.simulate then
-    -- Simulator only: debug output plus /LOGS/rftelem_alarms.log, so a
-    -- run can be checked from the SD folder without the debug window.
-    local line = string.format("%.2f %s %s%s", getTime() / 100, tier, tostring(path), muted and " (muted)" or "")
-    print("RFTelem alarm: " .. line)
-    pcall(function()
-      local f = io.open("/LOGS/rftelem_alarms.log", "a")
-      if f then io.write(f, line, "\n"); io.close(f) end
-    end)
+  local files = (type(voice) == "table") and voice or { voice }
+  for i = 1, #files do
+    local path = cfg.dir .. voiceSetDir(wgt) .. "/" .. files[i] .. ".wav"
+    if CONFIG.simulate then
+      -- Simulator only: debug output plus /LOGS/rftelem_alarms.log, so a
+      -- run can be checked from the SD folder without the debug window.
+      local line = string.format("%.2f %s %s%s", getTime() / 100, tier, path, muted and " (muted)" or "")
+      print("RFTelem alarm: " .. line)
+      pcall(function()
+        local f = io.open("/LOGS/rftelem_alarms.log", "a")
+        if f then io.write(f, line, "\n"); io.close(f) end
+      end)
+    end
+    if not muted and playFile then playFile(path) end
   end
-  if path and not muted and playFile then playFile(path) end
   if tier == "critical" then
     playPattern(cfg.hapticCritical)
   elseif tier == "caution" and not muted then
@@ -2320,11 +2357,19 @@ local function onChange(a, key, value, fn)
   end
 end
 
+-- Landing threshold in % from the "BattLand" option (10-50), else CONFIG.
+local function battLandPct(wgt)
+  local v = wgt.options and wgt.options.BattLand
+  if v and v >= 10 and v <= 50 then return math.floor(v) end
+  return CONFIG.alarm.battLand
+end
+
 local function runAlarms(wgt, t, running, connected)
   local cfg = CONFIG.alarm
   if not cfg.enabled then return end
   wgt.alarmMuted = isMuted(wgt)
   local a = wgt.alarm
+  local landPct = battLandPct(wgt)
 
   -- Link reports. Connect: "connected", then the current bank/profile as
   -- soon as those sensors report. Disconnect while the rotor was spinning
@@ -2349,8 +2394,11 @@ local function runAlarms(wgt, t, running, connected)
       t.perCellVoltage >= cfg.cellCritical + cfg.cellHyst, cfg.cellSustainSec)
   critical(wgt, "cellCrit", cellCrit, "cell_critical")
 
-  local battCrit = not cfg.nativeBackup and running and t.charge ~= nil and t.charge <= cfg.battCritical
-  critical(wgt, "battCrit", battCrit, "batt_critical")
+  -- "Battery NN%, land now": NN is the threshold rounded to the 5% voice
+  -- files (batt005..batt100).
+  local battCrit = not cfg.nativeBackup and running and t.charge ~= nil and t.charge <= landPct
+  critical(wgt, "battCrit", battCrit,
+    { string.format("batt%03d", math.floor(landPct / 5 + 0.5) * 5), "land" })
 
   local escCrit = t.temp ~= nil and
     latch(a, "escCrit", t.temp >= cfg.escCritical, t.temp < cfg.escCritical - cfg.escHyst, 0)
@@ -2403,8 +2451,9 @@ local function runAlarms(wgt, t, running, connected)
 
   -- Battery: one call per 10% step going down, rotor spinning only (the
   -- FC zeroes Bat% on disarm). "90%" is said when the charge reaches 90
-  -- (ceil, so 99% stays in the 100 step). The 30/20% steps add the
-  -- caution haptic; at or below battCritical the critical alarm takes over.
+  -- (ceil, so 99% stays in the 100 step). The step within 10% above the
+  -- landing threshold adds the caution haptic; at or below the threshold
+  -- the repeating "land now" critical above takes over.
   if running and t.charge then
     local step = math.max(0, math.min(10, math.ceil(t.charge / 10)))
     local last = a.prev.battStep
@@ -2413,8 +2462,8 @@ local function runAlarms(wgt, t, running, connected)
     elseif step < last then
       a.prev.battStep = step
       local pct = step * 10
-      if pct > cfg.battCritical then -- critical (or the native backup) covers the rest
-        local tier = (pct <= cfg.battCaution) and "caution" or "info"
+      if pct > landPct then -- critical (or the native backup) covers the rest
+        local tier = (pct <= landPct + 10) and "caution" or "info"
         alert(wgt, tier, string.format("batt%03d", pct))
       end
     end
@@ -2546,11 +2595,14 @@ end
 -- 4=Voidoll, 5=Zundamon.
 -- "Close" picks a source (e.g. the SH momentary button) that closes the
 -- flight log when pressed - works even when the widget isn't full-screen.
+-- "BattLand" is the remaining-% that triggers the repeating "battery NN%,
+-- land now" alarm (10-50, default 20).
 local options = {
   { "Theme", VALUE, 0, 0, 2 }, -- 0=color, 1=mono, 2=cyan
   { "Mute", SOURCE, 0 },
   { "Voice", VALUE, 0, 0, 5 },
   { "Close", SOURCE, 0 },
+  { "BattLand", VALUE, 20, 10, 50 },
 }
 
 return {

@@ -86,3 +86,14 @@ battprofile3,reserve,バッテリープロファイル、3
 battprofile4,reserve,バッテリープロファイル、4
 battprofile5,reserve,バッテリープロファイル、5
 battprofile6,reserve,バッテリープロファイル、6
+batt005,battery,バッテリー、5パーセント
+batt015,battery,バッテリー、15パーセント
+batt025,battery,バッテリー、25パーセント
+batt035,battery,バッテリー、35パーセント
+batt045,battery,バッテリー、45パーセント
+batt055,battery,バッテリー、55パーセント
+batt065,battery,バッテリー、65パーセント
+batt075,battery,バッテリー、75パーセント
+batt085,battery,バッテリー、85パーセント
+batt095,battery,バッテリー、95パーセント
+land,critical,着陸してください

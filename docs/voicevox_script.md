@@ -37,11 +37,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1 
 | governor | gov_* | ガバナー状態が変わったとき (LOST-HS は critical) |
 | profile | bank1–6 / profile1–6 | バンク (RTE#) / プロファイル (PID#) が変わったとき。接続直後にも現在値を 1 回 |
 | link | connected / disconnected | テレメトリー接続時 / 停止中の切断時 (回転中の切断は telemetry_lost) |
-| battery | batt000–100 | 回転中に残量が 10% の区切りを下回ったとき (30/20% は注意の振動つき) |
+| battery | batt000–100 (10% 刻み) | 回転中に残量が 10% の区切りを下回ったとき (着陸指示の +10% 以内は注意の振動つき) |
 | arm | armed / disarmed | ARM 状態が変わったとき。接続直後にも現在値を 1 回 |
 | arm | arm_switch_on / arm_disabled | ARMD ≠ 0 になったとき (注意: 短い振動つき)。67108872 は arm_switch_on |
 | caution | cell_low / esc_hot / flight_time | 注意: 短い振動 + 1 回 |
-| critical | cell_critical / batt_critical / esc_critical / bec_low / gov_losths / telemetry_lost | 危険: 振動パターン + 10 秒ごとに繰り返し |
+| critical | cell_critical / esc_critical / bec_low / gov_losths / gov_fallback / telemetry_lost | 危険: 振動パターン + 10 秒ごとに繰り返し |
+| critical | batt005–100 (5% 刻み) + land | 残量が `BattLand` (既定 20%) 以下: 「バッテリー、20パーセント」「着陸してください」を繰り返し |
 | armd | armd_* (27 種) | ARM 不可の理由。arm_disabled の後に最大 2 つ ([rotorflight_notes.md](rotorflight_notes.md)) |
 | native | rfbatt / rfcell | 案C の EdgeTX 標準機能用 ([alarms_native.md](alarms_native.md)) |
 | reserve | rescue_on/off, failsafe, battprofile1–6 | 用意のみ。センサー名が未確認のため未使用 |
