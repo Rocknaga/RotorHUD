@@ -70,7 +70,12 @@ getValue = function(src)
   if src == "tx-voltage" then return 7.9 end
   if src == 999 then return muteVal end
   -- "close": Close switch pressed for 0.5s at 90s (flight log is up 75..135s)
-  if src == 998 then return (opts.close and NOW >= 9000 and NOW < 9050) and 1024 or -1024 end
+  -- "bpstep": pressed at 13.0s and 13.5s (battery-profile picker, 12..17s)
+  if src == 998 then
+    if opts.close and NOW >= 9000 and NOW < 9050 then return 1024 end
+    if opts.bpstep and ((NOW >= 1300 and NOW < 1320) or (NOW >= 1350 and NOW < 1370)) then return 1024 end
+    return -1024
+  end
   return 0
 end
 getFieldInfo = function() return nil end
@@ -88,12 +93,27 @@ end
 if opts.droplink then patch("if s < 5 or s >= 75 then", "if s < 5 or s >= 60 then") end
 if opts.lowbatt then patch("t%.charge   = lerp%(99, 25, f%)", "t.charge   = lerp(99, 5, f)") end
 if opts.native then patch("nativeBackup = false,", "nativeBackup = true,") end
+-- "msp": go through the real MSP/CRSF path; the stubbed push logs each
+-- frame and then acts as the FC (BAT# follows 0.5s later)
+if opts.msp then patch("if CONFIG%.simulate then %-%- no FC", "if false then -- no FC") end
 -- ARMD with real reasons: THROTTLE (bit 7) + ANGLE (bit 8) + ARM_SWITCH (bit 26)
 if opts.armdthr then patch("t%.armd = 67108872", "t.armd = 67108864 + 128 + 256") end
 -- Governor FALLBACK (no headspeed signal) for 6s mid-flight
 if opts.fallback then
   patch('t%.armFlags, t%.gov = 1, "ACTIVE"', 't.armFlags, t.gov = 1, (s > 50 and s < 56) and "FALLBACK" or "ACTIVE"')
 end
+local wgtRef
+crossfireTelemetryPush = function(cmd, data)
+  if cmd == nil then return true end -- buffer free
+  local bytes = {}
+  for i = 1, #data do bytes[i] = string.format("%02X", data[i]) end
+  print(string.format("CRSF PUSH 0x%02X [%s]", cmd, table.concat(bytes, " ")))
+  if wgtRef and cmd == 0x7C and data[5] == 176 then
+    wgtRef.simBattPending = { value = data[6] + 1, at = NOW + 50 }
+  end
+  return true
+end
+
 local chunk = assert(load(src, "main.lua"))
 local widget = chunk()
 -- "voiceN" -> Voice option N (alarm voice set)
@@ -107,6 +127,7 @@ for a in pairs(opts) do
 end
 local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 },
   { Theme = 0, Mute = 999, Voice = voiceOpt, Close = 998, BattLand = landOpt })
+wgtRef = wgt
 
 -- Lua instructions per refresh() (EdgeTX aborts a frame with "CPU limit"
 -- past a fixed instruction budget). Counted in blocks of 100 via a hook;

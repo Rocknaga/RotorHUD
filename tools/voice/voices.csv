@@ -80,12 +80,12 @@ armd_armswitch,armd,アームスイッチがオンです
 rescue_on,reserve,レスキュー、作動
 rescue_off,reserve,レスキュー、解除
 failsafe,reserve,フェイルセーフ
-battprofile1,reserve,バッテリープロファイル、1
-battprofile2,reserve,バッテリープロファイル、2
-battprofile3,reserve,バッテリープロファイル、3
-battprofile4,reserve,バッテリープロファイル、4
-battprofile5,reserve,バッテリープロファイル、5
-battprofile6,reserve,バッテリープロファイル、6
+battprofile1,profile,バッテリープロファイル、1
+battprofile2,profile,バッテリープロファイル、2
+battprofile3,profile,バッテリープロファイル、3
+battprofile4,profile,バッテリープロファイル、4
+battprofile5,profile,バッテリープロファイル、5
+battprofile6,profile,バッテリープロファイル、6
 batt005,battery,バッテリー、5パーセント
 batt015,battery,バッテリー、15パーセント
 batt025,battery,バッテリー、25パーセント
@@ -97,3 +97,5 @@ batt075,battery,バッテリー、75パーセント
 batt085,battery,バッテリー、85パーセント
 batt095,battery,バッテリー、95パーセント
 land,critical,着陸してください
+battprofile_select,profile,バッテリープロファイルを選択してください
+battprofile_failed,caution,バッテリープロファイルを変更できませんでした

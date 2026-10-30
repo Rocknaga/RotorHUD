@@ -67,6 +67,13 @@
 5. フッター (15%): Throttle バー (`% / ℃`、白文字固定) とモデル名カード
    (機体画像 186×46 を等倍・中央、その下にモデル名)
 
+## バッテリープロファイル選択 (`drawBattSelect` / `bpUpdate`)
+
+- `wgt.bp.phase`: wait (BAT# 待ち・ARM 警告中は待つ。BAT# が 5 秒来なければ終了) → pick (選択中) →
+  send (`mspSetBatteryProfile` を 2 秒ごと最大 3 回、BAT# == 目標で成功) → done (結果を 1.5 秒表示)
+- 入力: `tick` の Close スイッチ立ち上がり = `bpStep`、`refresh` のタップ/Enter = `bpChoose`、ダイヤル = `bpStep`、RTN = 閉じる
+- ARM / 切断で即終了。画面種別 `battselect` は armwarning の次、dashboard の前
+
 ## 待機画面 (`drawStandby`)
 
 - トップバーなし (画面上端から描く。時計と TX 電池は待機画面自身に表示)

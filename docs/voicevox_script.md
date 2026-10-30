@@ -45,7 +45,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1 
 | critical | batt005–100 (5% 刻み) + land | 残量が `BattLand` (既定 20%) 以下: 「バッテリー、20パーセント」「着陸してください」を繰り返し |
 | armd | armd_* (27 種) | ARM 不可の理由。arm_disabled の後に最大 2 つ ([rotorflight_notes.md](rotorflight_notes.md)) |
 | native | rfbatt / rfcell | 案C の EdgeTX 標準機能用 ([alarms_native.md](alarms_native.md)) |
-| reserve | rescue_on/off, failsafe, battprofile1–6 | 用意のみ。センサー名が未確認のため未使用 |
+| profile | battprofile1–6 / battprofile_select | BAT# が変わったとき (接続直後にも現在値)。選択画面を出したとき |
+| caution | battprofile_failed | プロファイル切替を 3 回送っても BAT# が変わらなかったとき |
+| reserve | rescue_on/off, failsafe | 用意のみ (未使用) |
 
 ガバナーは 4.6 の HOLD / FALLBACK / BYPASS 用 (gov_hold / gov_fallback / gov_bypass) と、
 4.5 の THR-OFF / LOST-HS 用 (gov_throff / gov_losths) の両方がある。FALLBACK と LOST-HS は危険扱い。

@@ -71,12 +71,32 @@ main.lua の `ARMD_REASONS` / `decodeArmd` がこの表。ARM 警告画面に理
 `armingFlags`: bit 0 = ARMED、bit 1 = WAS_EVER_ARMED、bit 2 = WAS_ARMED_WITH_PREARM。
 → 0/2 = DISARM、1/3 = ARM (bit 2 が立つと 4〜7 もあり得るので main.lua は `% 2` で判定)。
 
+## バッテリープロファイル (main.lua の BATTERY PROFILE で使用)
+
+- 6 個 (`pg/battery.h` `BATTERY_PROFILE_COUNT 6`)、各プロファイルに容量 (`batteryCapacity[i]`)
+- 切替: `MSP_SET_BATTERY_PROFILE` = 176 (データ: 0 始まりの番号 U8)、読み出し `MSP_BATTERY_PROFILE` = 175
+  (`msp/msp_protocol.h`, `msp/msp.c`)。他に RC 調整機能 `ADJUSTMENT_BATTERY_PROFILE` = 82
+- `changeBatteryProfile()` は RAM の設定を変えるだけで EEPROM に保存しない (`sensors/battery.c`)
+- テレメトリ: `BATTERY_PROFILE` 0x1214 (U8、番号 + 1)。EdgeTX 上の名前は **`BAT#`**
+  (rotorflight-lua-scripts `src/SCRIPTS/RF2/rf2tlm_sensors.lua` 97 番。Gov / Hspd / ARMD など他の名前もこの表と一致)
+
+## MSP を CRSF で送る方法
+
+出典: rotorflight-lua-scripts `src/SCRIPTS/RF2/MSP/crsf.lua` と `common.lua` (2026-09-30 の master)、
+EdgeTX v2.12.0 `radio/src/lua/api_general.cpp`。
+- `crossfireTelemetryPush(0x7C, { 0xC8, 0xEA, payload... })` — 0x7C = MSP 書き込み、0xC8 = FC、0xEA = 送信機
+- MSP v1 payload: `status` (0x20 = v1、0x10 = 開始フラグ、下位 4bit = 連番)、`size`、`cmd`、データ、
+  `crc` (= size xor cmd xor データ)。1 フレームあたり最大 8 バイト (コマンド 176 は 7 バイトで 1 フレーム)
+- `crossfireTelemetryPush` は全スクリプト種別に登録された一般 API (ウィジェットからも呼べる)。
+  モジュールが CRSF でなければ nil、出力バッファ使用中なら false
+- `crossfireTelemetryPop` は全スクリプト共通のキュー (`getTelemetryQueue`)。ウィジェットが pop すると
+  rf2tlm がセンサーにするフレームを奪うので、RF Telem は pop しない (成功は BAT# の変化で確認)
+
 ## 未使用だが送られているセンサー (音声だけ用意済み)
 
 | センサー | ID | 用意した音声 |
 |---|---|---|
 | RESCUE_STATE | 0x1204 (U8: 0=OFF, 1=PULLUP, 2=FLIP, 3=CLIMB, 4=HOVER, 5=EXIT) | rescue_on / rescue_off |
 | FLIGHT_MODE | 0x1201 (U16 フラグ。FAILSAFE_MODE など) | failsafe |
-| BATTERY_PROFILE | 0x1214 (U8、1 始まり) | battprofile1–6 |
 
-これらは実機の Telemetry 一覧 (42 項目) での名前が未確認のため、main.lua にはまだ組み込んでいない。
+rf2tlm での名前は RESCUE_STATE = `Resc`、FLIGHT_MODE = `Mode`。main.lua にはまだ組み込んでいない。

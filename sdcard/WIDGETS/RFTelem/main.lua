@@ -172,6 +172,22 @@ local CONFIG = {
     -- that order since RQly (link quality %) is the most directly
     -- useful for the signal-bars icon.
     signal          = { "RQly", "1RSS", "RSNR", "RSSI" },
+    -- Battery profile, 1-based (0x1214). Name from rotorflight-lua-scripts
+    -- src/SCRIPTS/RF2/rf2tlm_sensors.lua - the same table that names every
+    -- sensor above.
+    batteryProfile  = { "BAT#", "Bat#" },
+  },
+
+  -- Battery-profile picker shown right after connecting (see BATTERY
+  -- PROFILE below). Labels are free text for the 6 FC profiles, e.g.
+  -- "6S 5000" - the widget only sends the profile number.
+  batteryProfile = {
+    enabled     = true,
+    labels      = { "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5", "Profile 6" },
+    timeoutSec  = 15,   -- no input this long: keep the current profile
+    applyIdleSec = 3,   -- switch-stepping: apply after this long without a press
+    retrySec    = 2,    -- resend if BAT# hasn't changed by then
+    maxTries    = 3,
   },
 
   -- Per-cell voltage thresholds (volts) for battery-related coloring.
@@ -291,6 +307,7 @@ local CONFIG = {
     -- The 10% voice step just above it (<= land + 10) gets the caution
     -- haptic.
     battLand    = 20,
+    battRepeatSec = 20, -- the land-now call repeats this often (haptic + voice)
     escCaution  = 80,    -- deg C
     escCritical = 90,
     escHyst     = 5,
@@ -765,7 +782,12 @@ local function simulateTelemetry(wgt)
     signal = 100, armd = 0, armFlags = 0, gov = "OFF", rpm = 0, throttle = 0,
     voltage = 50.4, current = 0.4, temp = 32, charge = 100, capacity = 0,
     becV = 8.3, bank = 1, pidProfile = 1,
+    -- Follows mspSetBatteryProfile() 0.5s after a "send" (no FC here)
+    battProfile = wgt.simBattProfile or 1,
   }
+  if wgt.simBattPending and now >= wgt.simBattPending.at then
+    wgt.simBattProfile, wgt.simBattPending = wgt.simBattPending.value, nil
+  end
 
   if s < 12 then
     t.armd = 67108872
@@ -834,6 +856,7 @@ local function readTelemetry(wgt)
   local armdId   = resolveSensor(c, "armDisableFlags", s.armDisableFlags)
   local armfId   = resolveSensor(c, "armFlags", s.armFlags)
   local sigId    = resolveSensor(c, "signal", s.signal)
+  local bpId     = resolveSensor(c, "batteryProfile", s.batteryProfile)
 
   local govText  = decodeGovernor(govId and getValue(govId) or nil)
   local rpm      = rpmId and getValue(rpmId) or nil
@@ -849,6 +872,7 @@ local function readTelemetry(wgt)
   local armd     = armdId and getValue(armdId) or nil
   local armFlags = armfId and getValue(armfId) or nil
   local signal   = sigId and getValue(sigId) or nil
+  local battProfile = bpId and getValue(bpId) or nil
 
   local perCellVoltage = nil
   if cellVId then
@@ -867,6 +891,7 @@ local function readTelemetry(wgt)
     gov = govText, rpm = rpm, voltage = voltage, perCellVoltage = perCellVoltage,
     current = current, temp = temp, charge = charge, capacity = capacity, throttle = throttle,
     becV = becV, bank = bank, pidProfile = pidProfile, armd = armd, armFlags = armFlags, signal = signal,
+    battProfile = (battProfile and battProfile > 0) and math.floor(battProfile) or nil,
   }
 end
 
@@ -1874,6 +1899,79 @@ local function drawFlightLog(wgt, y, w, h)
   end
 end
 
+-- Battery-profile picker (state in wgt.bp, see BATTERY PROFILE): title
+-- strip with the status, the 6 FC profiles as a 3x2 tile grid (current
+-- one tagged, highlighted one outlined in the accent color), and a hint
+-- strip for the inputs. Tile rects go to wgt.bpTiles for touch.
+local function drawBattSelect(wgt, t, y, w, h)
+  lcd.drawFilledRectangle(0, y, w, h - y, COLOR.bg)
+  local pad, bp, cfg = 12, wgt.bp, CONFIG.batteryProfile
+  local panelW = w - pad * 2
+  local now = getTime()
+
+  local titleH = 40
+  drawChamferedRect(pad, y, panelW, titleH, COLOR.panel, COLOR.bg, 6)
+  lcd.drawText(pad + 14, y + titleH / 2, "Battery profile", LEFT + VCENTER + MIDSIZE + COLOR.white)
+  local status, statusColor = "Select before flight", COLOR.dim
+  if bp.phase == "send" then
+    status = "Applying " .. bp.target .. "..."
+  elseif bp.phase == "done" then
+    if bp.result == "fail" then
+      status, statusColor = "No change - FC did not respond", COLOR.red
+    else
+      status, statusColor = "Profile " .. (t.battProfile or bp.sel) .. " set", COLOR.green
+    end
+  end
+  lcd.drawText(pad + panelW - 14, y + titleH / 2, status, RIGHT + VCENTER + SMLSIZE + statusColor)
+
+  local hintH = 40
+  local gridY = y + titleH + pad
+  local gridH = h - pad - hintH - pad - gridY
+  local gap = 10
+  local tileW = math.floor((panelW - gap * 2) / 3)
+  local tileH = math.floor((gridH - gap) / 2)
+  wgt.bpTiles = {}
+  for i = 1, 6 do
+    local col, row = (i - 1) % 3, math.floor((i - 1) / 3)
+    local tx, ty = pad + col * (tileW + gap), gridY + row * (tileH + gap)
+    wgt.bpTiles[i] = { tx, ty, tileW, tileH }
+    local selected = (bp.sel == i)
+    if selected then
+      -- accent, not accentBorder: the latter is a near-background grey in
+      -- the color theme and the highlight didn't show in the simulator
+      drawChamferedRect(tx, ty, tileW, tileH, COLOR.accent, COLOR.bg, 6)
+      drawChamferedRect(tx + 3, ty + 3, tileW - 6, tileH - 6, COLOR.accentPanel, COLOR.accent, 5)
+    else
+      drawChamferedRect(tx, ty, tileW, tileH, COLOR.panel, COLOR.bg, 6)
+    end
+    lcd.drawText(tx + 18, ty + tileH / 2 - 12, tostring(i),
+      LEFT + VCENTER + DBLSIZE + (selected and COLOR.white or COLOR.dim))
+    local label = cfg.labels[i] or ("Profile " .. i)
+    lcd.drawText(tx + 18, ty + tileH - 22, label,
+      LEFT + VCENTER + fitFontMeasured(tileW - 30, 27, label, SMLSIZE) + (selected and COLOR.white or COLOR.dim))
+    if t.battProfile == i then
+      lcd.drawText(tx + tileW - 12, ty + 16, "current", RIGHT + VCENTER + SMLSIZE + COLOR.green)
+    end
+  end
+
+  local hy = h - pad - hintH
+  drawChamferedRect(pad, hy, panelW, hintH, COLOR.panel, COLOR.bg, 6)
+  local hint
+  if bp.phase == "pick" then
+    local left = cfg.timeoutSec - math.floor((now - (bp.lastInput or bp.since)) / 100)
+    if bp.stepped then
+      left = cfg.applyIdleSec - math.floor((now - bp.lastInput) / 100)
+      hint = "Applies " .. bp.sel .. " in " .. math.max(0, left) .. "s  -  press again for the next"
+    else
+      hint = "Tap a profile, or press the Close switch to step  -  keeps current in " .. math.max(0, left) .. "s"
+    end
+  else
+    hint = "Arming closes this screen"
+  end
+  lcd.drawText(pad + 14, hy + hintH / 2, hint,
+    LEFT + VCENTER + fitFontMeasured(panelW - 28, 23, hint, SMLSIZE) + COLOR.dim)
+end
+
 -- A large, hard-to-miss warning screen that takes over the whole
 -- dashboard area (same idea as drawStandby) for the one arming-disable
 -- condition that's actually confirmed and specific: the arm switch was
@@ -1946,6 +2044,8 @@ local function drawLarge(wgt, t, w, h)
     screenType = wgt.showFlightLog and "flightlog" or "standby"
   elseif wgt.armWarningActive then
     screenType = "armwarning"
+  elseif wgt.bp and wgt.bp.phase ~= "wait" then
+    screenType = "battselect"
   else
     screenType = "dashboard"
   end
@@ -2009,6 +2109,11 @@ local function drawLarge(wgt, t, w, h)
   -- (standby was handled above, before the top bar).
   if screenType == "flightlog" then
     drawFlightLog(wgt, topBarY + topBarH + pad, w, h)
+    drawTransitionOverlay(wgt, w, h)
+    return
+  end
+  if screenType == "battselect" then
+    drawBattSelect(wgt, t, topBarY + topBarH + pad, w, h)
     drawTransitionOverlay(wgt, w, h)
     return
   end
@@ -2325,11 +2430,12 @@ local function latch(a, key, onCond, offCond, sustainSec)
   return a.active[key] == true
 end
 
-local function critical(wgt, key, isOn, voice)
+-- repeatSec: this alarm's repeat interval (default CONFIG.alarm.repeatSec).
+local function critical(wgt, key, isOn, voice, repeatSec)
   local a = wgt.alarm
   if not isOn then a.lastFire[key] = nil; return end
   local now = getTime()
-  if not a.lastFire[key] or now - a.lastFire[key] >= CONFIG.alarm.repeatSec * 100 then
+  if not a.lastFire[key] or now - a.lastFire[key] >= (repeatSec or CONFIG.alarm.repeatSec) * 100 then
     a.lastFire[key] = now
     alert(wgt, "critical", voice)
   end
@@ -2380,6 +2486,7 @@ local function runAlarms(wgt, t, running, connected)
     if connected then
       alert(wgt, "info", "connected")
       a.sayFirst.arm, a.sayFirst.armd, a.sayFirst.bank, a.sayFirst.pid = true, true, true, true
+      a.sayFirst.battprof = true
     elseif wgt.alarmLink ~= nil then
       alert(wgt, wgt.wasRunning and "critical" or "info",
         wgt.wasRunning and "telemetry_lost" or "disconnected")
@@ -2398,7 +2505,7 @@ local function runAlarms(wgt, t, running, connected)
   -- files (batt005..batt100).
   local battCrit = not cfg.nativeBackup and running and t.charge ~= nil and t.charge <= landPct
   critical(wgt, "battCrit", battCrit,
-    { string.format("batt%03d", math.floor(landPct / 5 + 0.5) * 5), "land" })
+    { string.format("batt%03d", math.floor(landPct / 5 + 0.5) * 5), "land" }, cfg.battRepeatSec)
 
   local escCrit = t.temp ~= nil and
     latch(a, "escCrit", t.temp >= cfg.escCritical, t.temp < cfg.escCritical - cfg.escHyst, 0)
@@ -2448,6 +2555,8 @@ local function runAlarms(wgt, t, running, connected)
   -- Bank = RTE# (rates profile, the V-bar "bank"), Profile = PID#.
   onChange(a, "bank", t.bank and math.floor(t.bank), function(b) alert(wgt, "info", "bank" .. b) end)
   onChange(a, "pid", t.pidProfile and math.floor(t.pidProfile), function(p) alert(wgt, "info", "profile" .. p) end)
+  -- Battery profile (BAT#): also how a picker change gets confirmed aloud.
+  onChange(a, "battprof", t.battProfile, function(b) alert(wgt, "info", "battprofile" .. b) end)
 
   -- Battery: one call per 10% step going down, rotor spinning only (the
   -- FC zeroes Bat% on disarm). "90%" is said when the charge reaches 90
@@ -2470,6 +2579,121 @@ local function runAlarms(wgt, t, running, connected)
   end
 end
 
+-- ============================== BATTERY PROFILE ===========================
+-- Right after a connect (disarmed), a picker for the FC's 6 battery
+-- profiles. The choice goes out as MSP_SET_BATTERY_PROFILE (176), framed
+-- exactly like rotorflight-lua-scripts src/SCRIPTS/RF2/MSP/crsf.lua and
+-- common.lua: CRSF frame 0x7C (MSP write) to 0xC8 (FC) from 0xEA (radio),
+-- MSP v1 payload { status, size, cmd, data, crc }.
+-- Only crossfireTelemetryPush is used. crossfireTelemetryPop reads one
+-- queue shared by every script (EdgeTX 2.12 lua/api_general.cpp,
+-- getTelemetryQueue) and would steal the frames rf2tlm turns into the
+-- sensors - so success is confirmed by the BAT# sensor changing instead.
+-- The FC keeps the profile in RAM only (no EEPROM write: sensors/battery.c
+-- changeBatteryProfile), i.e. until its next power-up - hence asking on
+-- every connect.
+
+local MSP_SET_BATTERY_PROFILE = 176
+local mspSeq = 0
+
+-- Byte XOR in plain arithmetic (EdgeTX Lua is 5.2-based: no ~ operator).
+local function xor8(a, b)
+  local r, bit = 0, 1
+  for _ = 1, 8 do
+    if a % 2 ~= b % 2 then r = r + bit end
+    a, b, bit = math.floor(a / 2), math.floor(b / 2), bit * 2
+  end
+  return r
+end
+
+-- Queue the MSP write for profile 1..6. False when the CRSF output buffer
+-- is busy or no module is CRSF (the caller retries).
+local function mspSetBatteryProfile(wgt, profile)
+  local index = profile - 1
+  if CONFIG.simulate then -- no FC: simulateTelemetry follows after 0.5s
+    wgt.simBattPending = { value = profile, at = getTime() + 50 }
+    return true
+  end
+  if not crossfireTelemetryPush or crossfireTelemetryPush() ~= true then return false end
+  local size = 1
+  local status = 0x30 + mspSeq -- MSP v1 (1 << 5) + start flag (1 << 4) + sequence
+  mspSeq = (mspSeq + 1) % 16
+  local crc = xor8(xor8(size, MSP_SET_BATTERY_PROFILE), index)
+  return crossfireTelemetryPush(0x7C,
+    { 0xC8, 0xEA, status, size, MSP_SET_BATTERY_PROFILE, index, crc }) == true
+end
+
+-- wgt.bp: nil = no picker. phase: "wait" (for BAT# / no arm warning),
+-- "pick", "send" (until BAT# == target), "done" (result shown 1.5s).
+local function bpStart(wgt)
+  wgt.bp = CONFIG.batteryProfile.enabled and { phase = "wait", since = getTime() } or nil
+end
+
+local function bpApply(wgt, t)
+  local bp = wgt.bp
+  if t.battProfile == bp.sel then
+    bp.phase, bp.doneAt, bp.result = "done", getTime(), "same"
+  else
+    bp.phase, bp.target, bp.tries, bp.sentAt = "send", bp.sel, 0, nil
+  end
+end
+
+-- Inputs: step (switch press / rotary), choose (tap / Enter), dismiss.
+local function bpStep(wgt, dir)
+  local bp = wgt.bp
+  if not bp or bp.phase ~= "pick" then return false end
+  bp.sel = (bp.sel - 1 + dir) % 6 + 1
+  bp.lastInput, bp.stepped = getTime(), true
+  return true
+end
+
+local function bpChoose(wgt, t, profile)
+  local bp = wgt.bp
+  if not bp or bp.phase ~= "pick" then return false end
+  bp.sel = profile or bp.sel
+  bpApply(wgt, t)
+  return true
+end
+
+local function bpUpdate(wgt, t, connected)
+  local bp = wgt.bp
+  if not bp then return end
+  local cfg, now = CONFIG.batteryProfile, getTime()
+  local armed = t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1
+  -- Never talk to the FC while armed; a lost link ends the picker too.
+  if not connected or armed then wgt.bp = nil; return end
+
+  if bp.phase == "wait" then
+    if wgt.armWarningActive then
+      bp.since = now -- arm switch still on etc.: ask once that's cleared
+    elseif t.battProfile then
+      bp.phase, bp.sel, bp.since, bp.lastInput = "pick", t.battProfile, now, nil
+      alert(wgt, "info", "battprofile_select")
+    elseif now - bp.since > 500 then
+      wgt.bp = nil -- no BAT# sensor: firmware/telemetry without profiles
+    end
+  elseif bp.phase == "pick" then
+    if bp.stepped and now - bp.lastInput >= cfg.applyIdleSec * 100 then
+      bpApply(wgt, t)
+    elseif now - (bp.lastInput or bp.since) >= cfg.timeoutSec * 100 then
+      wgt.bp = nil -- no answer: keep the current profile
+    end
+  elseif bp.phase == "send" then
+    if t.battProfile == bp.target then
+      bp.phase, bp.doneAt, bp.result = "done", now, "ok" -- voice: runAlarms' BAT# onChange
+    elseif not bp.sentAt or now - bp.sentAt >= cfg.retrySec * 100 then
+      if bp.tries >= cfg.maxTries then
+        bp.phase, bp.doneAt, bp.result = "done", now, "fail"
+        alert(wgt, "caution", "battprofile_failed")
+      elseif mspSetBatteryProfile(wgt, bp.target) then
+        bp.tries, bp.sentAt = bp.tries + 1, now
+      end
+    end
+  elseif bp.phase == "done" and now - bp.doneAt >= 150 then
+    wgt.bp = nil
+  end
+end
+
 -- Per-tick state update shared by refresh() and background(): read the
 -- sensors, handle connect/disconnect, run every tracker and the alarms.
 -- Returns the telemetry table and the link state for drawing.
@@ -2488,6 +2712,7 @@ local function tick(wgt)
   if connected and not wgt.wasConnected then
     resetTelemetryState(wgt)
     t = readTelemetry(wgt) -- re-read with the freshly cleared sensor cache
+    bpStart(wgt)
   end
   wgt.wasConnected = connected
 
@@ -2503,6 +2728,7 @@ local function tick(wgt)
   updateFlightSamples(wgt, t, running)
   runAlarms(wgt, t, running, connected)
   wgt.wasRunning = running and connected
+  bpUpdate(wgt, t, connected)
 
   -- Track when this disconnect started, so the flight log can
   -- auto-dismiss after a timeout - this is what makes the dismiss
@@ -2521,11 +2747,16 @@ local function tick(wgt)
 
   -- "Close" option (e.g. the SH momentary button): a press - rising edge,
   -- so a switch already held at disconnect doesn't count - closes the
-  -- flight log. Polled here, so it works without full-screen mode, which
-  -- is the only mode where touch/key events reach a widget.
+  -- flight log, or steps the battery-profile picker to the next profile.
+  -- Polled here, so it works without full-screen mode, which is the only
+  -- mode where touch/key events reach a widget.
   local closeOn = sourceActive(wgt.options and wgt.options.Close)
-  if closeOn and not wgt.closeWasOn and not connected then
-    wgt.showFlightLog = false
+  if closeOn and not wgt.closeWasOn then
+    if not connected then
+      wgt.showFlightLog = false
+    else
+      bpStep(wgt, 1)
+    end
   end
   wgt.closeWasOn = closeOn
   return t, connected
@@ -2564,6 +2795,28 @@ local function refresh(wgt, event, touchState)
   if not connected and event and event ~= 0 and
      (event == EVT_TOUCH_TAP or event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
     wgt.showFlightLog = false
+  end
+
+  -- Battery-profile picker, full-screen inputs: tap a tile = apply it,
+  -- rotary = move, Enter = apply the highlighted one, RTN = keep current.
+  if connected and wgt.bp and wgt.bp.phase == "pick" and event and event ~= 0 then
+    if event == EVT_TOUCH_TAP and touchState and wgt.bpTiles then
+      for i = 1, #wgt.bpTiles do
+        local r = wgt.bpTiles[i]
+        if touchState.x >= r[1] and touchState.x < r[1] + r[3]
+           and touchState.y >= r[2] and touchState.y < r[2] + r[4] then
+          bpChoose(wgt, t, i)
+        end
+      end
+    elseif event == EVT_VIRTUAL_NEXT then
+      bpStep(wgt, 1)
+    elseif event == EVT_VIRTUAL_PREV then
+      bpStep(wgt, -1)
+    elseif event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK then
+      bpChoose(wgt, t)
+    elseif event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then
+      wgt.bp = nil
+    end
   end
 
   local w, h = wgt.zone.w, wgt.zone.h
