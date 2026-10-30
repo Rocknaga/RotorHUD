@@ -195,7 +195,7 @@ inputNames:
 potsWarnEnabled: 0
 screenData: 
    0:
-      LayoutId: Layout1x1
+      LayoutId: Layout1x1AM
       layoutData: 
          zones: 
             0:

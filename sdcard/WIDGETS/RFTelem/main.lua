@@ -1544,6 +1544,23 @@ local function drawTransitionOverlay(wgt, w, h)
   lcd.drawFilledRectangle(math.max(0, revealX - 3), 0, 3, h, COLOR.accent)
 end
 
+-- Touch and keys only reach a widget in full-screen mode, and Lua can't
+-- enter it (EdgeTX 2.12 lua/api_colorlcd_lvgl.cpp only has isAppMode /
+-- isFullScreen / exitFullScreen). In the "App mode" screen layout a long
+-- ENTER press makes the widget full-screen (gui/colorlcd/mainview/
+-- view_main.cpp onLongPress) - verified in the 2.12 simulator, where a
+-- tile tap then reached the picker; leave with a long RTN press. Returns
+-- a hint to show while touch isn't live, else nil (also nil when the lvgl
+-- API isn't there to ask).
+local function touchHint()
+  if not (lvgl and lvgl.isFullScreen) then return nil end
+  local ok, full = pcall(lvgl.isFullScreen)
+  if not ok or full then return nil end
+  local okApp, app = pcall(function() return lvgl.isAppMode and lvgl.isAppMode() end)
+  if okApp and app then return "Hold ENTER to enable touch" end
+  return "Touch needs full screen (App mode layout)"
+end
+
 -- Standby ("Waiting for connection"), built from the dashboard's pieces
 -- and filled with what is known without a model link: a big clock and the
 -- model card (hero panel), a status strip with a sweeping scan bar so the
@@ -1586,7 +1603,7 @@ local function drawStandby(wgt, y, w, h)
   local dots = string.rep(".", math.floor(getTime() / 50) % 4)
   lcd.drawText(pad + 16, sy + 22, "Waiting for connection" .. dots,
     LEFT + VCENTER + MIDSIZE + COLOR.white)
-  lcd.drawText(pad + panelW - 16, sy + 22, "Power on the model",
+  lcd.drawText(pad + panelW - 16, sy + 22, touchHint() or "Power on the model",
     RIGHT + VCENTER + SMLSIZE + COLOR.dim)
   local trackX, trackW, trackY = pad + 16, panelW - 32, sy + sh - 9
   lcd.drawFilledRectangle(trackX, trackY, trackW, 3, COLOR.barBg)
@@ -1962,6 +1979,8 @@ local function drawBattSelect(wgt, t, y, w, h)
     if bp.stepped then
       left = cfg.applyIdleSec - math.floor((now - bp.lastInput) / 100)
       hint = "Applies " .. bp.sel .. " in " .. math.max(0, left) .. "s  -  press again for the next"
+    elseif touchHint() then
+      hint = "Close switch: next profile  -  " .. touchHint() .. "  -  " .. math.max(0, left) .. "s"
     else
       hint = "Tap a profile, or press the Close switch to step  -  keeps current in " .. math.max(0, left) .. "s"
     end
