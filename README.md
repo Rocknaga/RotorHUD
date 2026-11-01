@@ -95,6 +95,10 @@ EdgeTX の lvgl ウィジェットとして描く (`CONFIG.lvgl = true`)。各�
   (着陸指示 %、セル電圧 注意/危険、ESC 温度 注意/危険、BEC)、表示 (テーマ、fps 表示、機体画像) をタッチで変更。
   SD の `/WIDGETS/RFTelem/settings.txt` に保存され、ウィジェットオプションの同じ項目より優先される。
   待機画面にも Menu ボタン (全画面時) があり、未接続でも Settings を開ける
+- **Rotorflight settings は RFTelem の見た目**: 公式 RF2 の画面部品だけを差し替え (読み書き・保存は RF2)。
+  メインメニューはタイル、各ページはカード/表のタイル (指で縦スクロール)。値をタップ → 下から編集パネル
+  (スライダー、-10 -1 +1 +10、OK / Cancel。選択肢はボタンを並べて 1 タップ)。上部に Back / Save / Menu (Reload・Reboot FC)。
+  CONFIG.tools.rf2Skin = false で RF2 公式の画面
 - ExpressLRS ツールは lcd 描画のため lvgl 版では開けない (SYS > Tools から使う)
 - 待機画面の小さなアイコンと、画面切替のワイプ演出は lvgl 版には無い
 - `CONFIG.lvgl = false` で従来の lcd 描画に戻る (下記の RF2 カード型画面などはこちら用)

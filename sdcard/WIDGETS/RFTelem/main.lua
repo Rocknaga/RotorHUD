@@ -4154,14 +4154,14 @@ local function startRf2Lvgl(apiVersion)
   end
   assert(loadScript(dir .. "rf2.lua"))()
   rf2.radio = rf2.executeScript("radios")
-  if apiVersion then -- already read by this widget: skip RF2's request
-    local execute = rf2.executeScript
-    rf2.executeScript = function(name, ...)
-      if name == "ui_init" then
-        return { t = "", f = function() rf2.apiVersion = apiVersion; return true end }
-      end
-      return execute(name, ...)
+  local execute = rf2.executeScript
+  rf2.executeScript = function(name, ...)
+    if name == "ui_init" and apiVersion then -- already read by this widget: skip RF2's request
+      return { t = "", f = function() rf2.apiVersion = apiVersion; return true end }
     end
+    local skin = CONFIG.tools.rf2Skin and RF2UI.lvSkin and RF2UI.lvSkin[name]
+    if skin then return skin(...) end -- widget-style screens (LV.rf2)
+    return execute(name, ...)
   end
   rf2.mspQueue = rf2.executeScript("MSP/mspQueue")
   rf2.mspHelper = rf2.executeScript("MSP/mspHelper")
@@ -5168,6 +5168,338 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
     end
   end
 end
+
+-- ---------------------------- RF2 in widget style -------------------------
+-- The hosted RF2 lvgl UI (ui_lvgl_runner) keeps its logic - MSP reads and
+-- writes, Save (EEPROM), page loading - and builds its screens through
+-- five modules: LVGL/mainMenu, page, messageBox, popupMenu, waitMessage.
+-- LV.rf2Skin replaces them with these (CONFIG.tools.rf2Skin): the widget's
+-- header and colors, the page as cards of large tiles (rf2CardModel, as
+-- in the lcd skin) in a scrolling box, and a bottom edit sheet with a
+-- slider, -10/-1/+1/+10, choice buttons, OK and Cancel. Editing follows
+-- RF2's LVGL/page.lua: numbers call field:change(newValue, page) before
+-- the value is set, choices set it and call field:postEdit(page).
+LV.rf2 = {}
+
+function LV.rf2.value(f)
+  if f.t and string.sub(f.t, 1, 1) == "[" and not f.data then return (string.gsub(f.t, "[%[%]]", "")) end
+  local d = f.data
+  if not d or d.value == nil then return "---" end
+  local v = d.value
+  if type(v) == "number" then
+    if type(d.table) == "table" and d.table[v] ~= nil then return tostring(d.table[v]) .. (d.unit or "") end
+    if d.scale and d.scale > 1 then -- keep the field's resolution: 5.0 s, 1.80, 12.5
+      v = string.format("%." .. ((d.scale >= 100) and 2 or 1) .. "f", v / d.scale)
+    elseif d.scale then
+      v = string.format("%d", math.floor(v / d.scale))
+    else
+      v = string.format("%d", math.floor(v))
+    end
+  end
+  return tostring(v) .. (d.unit or "")
+end
+
+-- header: Back, title / subtitle, action buttons on the right
+function LV.rf2.header(k, title, subtitle, back, actions)
+  local x, y, h = LV.ICON + 4, 8, 52
+  LV.rect(k, x, y, LCD_W - 12 - x, h, COLOR.chip, 8)
+  LV.button(k, x + 6, y + 4, 110, h - 8, "< Back", back, MIDSIZE)
+  local right = LCD_W - 12 - 6
+  for i = #(actions or {}), 1, -1 do
+    local a = actions[i]
+    right = right - a.w
+    LV.button(k, right, y + 4, a.w, h - 8, a.text, a.press, MIDSIZE, a.extra)
+    right = right - 8
+  end
+  local tx = x + 6 + 110 + 14
+  local tw = right - 8 - tx
+  LV.text(k, tx, y + (subtitle and 17 or h / 2), tw, title or "", LV.fitFont(title or "", tw, MIDSIZE), COLOR.white)
+  if subtitle then LV.text(k, tx, y + 40, tw, subtitle, SMLSIZE, COLOR.dim) end
+  LV.touchBadge(k)
+end
+
+function LV.rf2.mainMenu()
+  local t = {}
+  t.show = function(menu)
+    local k = {}
+    LV.rect(k, 0, 0, LCD_W, LCD_H, COLOR.bg)
+    LV.rf2.header(k, "Rotorflight settings", menu.subtitle or menu.title, function() if menu.back then menu.back() end end)
+    local cols, gap, th = 3, 8, 64
+    local tw = math.floor((LCD_W - 24 - (cols - 1) * gap) / cols)
+    local kids, texts = {}, {}
+    for i, item in ipairs(menu.items) do texts[i] = item.text end
+    local font = rf2Font(tw - 20, texts) -- one size for every tile
+    for i, item in ipairs(menu.items) do
+      local cx, cy = ((i - 1) % cols) * (tw + gap), math.floor((i - 1) / cols) * (th + gap)
+      LV.button(kids, cx, cy, tw, th, item.text, function() if item.click then item.click(i) end end, font)
+    end
+    k[#k + 1] = { type = "box", x = 12, y = LV.Y1, w = LCD_W - 24, h = LCD_H - LV.Y1 - 6,
+      scrollDir = lvgl.SCROLL_VER, scrollBar = true, children = kids }
+    lvgl.clear()
+    lvgl.build(k)
+  end
+  return t
+end
+
+-- modal card appended over the current screen; closing rebuilds the screen
+function LV.rf2.modal(title, text, buttons)
+  local k = {}
+  LV.rect(k, 0, 0, LCD_W, LCD_H, COLOR.bg, nil, { opacity = 160 })
+  local mw = 560
+  local mh = 70 + (text and 110 or 0) + #buttons * 68
+  local mx, my = math.floor((LCD_W - mw) / 2), math.floor((LCD_H - mh) / 2)
+  LV.rect(k, mx, my, mw, mh, COLOR.accent, 8)
+  LV.rect(k, mx + 2, my + 2, mw - 4, mh - 4, COLOR.panel, 7)
+  LV.text(k, mx + 20, my + 32, mw - 40, title or "", MIDSIZE, COLOR.white)
+  local y = my + 64
+  if text then
+    local ly = y + 12
+    for line in string.gmatch(text, "([^\n]+)") do
+      LV.text(k, mx + 20, ly, mw - 40, line, 0, COLOR.white)
+      ly = ly + 30
+    end
+    y = y + 110
+  end
+  for _, b in ipairs(buttons) do
+    LV.button(k, mx + 20, y, mw - 40, 60, b.text, b.press, MIDSIZE)
+    y = y + 68
+  end
+  lvgl.build(k)
+end
+
+function LV.rf2.messageBox()
+  return { show = function(title, text)
+    LV.rf2.modal(title, text, { { text = "OK", press = function() if LV.rf2.redraw then LV.rf2.redraw() end end } })
+  end }
+end
+
+function LV.rf2.popupMenu()
+  return { show = function(menu)
+    local buttons = {}
+    for i, item in ipairs(menu.items) do
+      buttons[#buttons + 1] = { text = item.text, press = function()
+        if LV.rf2.redraw then LV.rf2.redraw() end
+        if item.click then item.click(i) end
+      end }
+    end
+    buttons[#buttons + 1] = { text = "Cancel", press = function() if LV.rf2.redraw then LV.rf2.redraw() end end }
+    LV.rf2.modal(menu.title or "Menu", nil, buttons)
+  end }
+end
+
+function LV.rf2.waitMessage()
+  local t = {}
+  t.setWaitMessage = function(title, message, back)
+    if message ~= t.message or not t.shown then t.message, t.title, t.back, t.shown = message, title, back, false end
+  end
+  t.clearWaitMessage = function()
+    if not t.message then return end
+    t.message, t.shown = nil, false
+  end
+  t.updateWaitMessage = function()
+    if not t.message or t.shown then return end
+    t.shown = true
+    local k = {}
+    LV.rect(k, 0, 0, LCD_W, LCD_H, COLOR.bg)
+    LV.rf2.header(k, t.title ~= "" and t.title or "Rotorflight settings", nil, function() if t.back then t.back() end end)
+    LV.text(k, 12, LCD_H / 2, LCD_W - 24, t.message, DBLSIZE, COLOR.white, CENTER)
+    lvgl.clear()
+    lvgl.build(k)
+  end
+  return t
+end
+
+-- One page: cards of tiles in a scrolling box; tap a tile to edit it.
+function LV.rf2.page()
+  local t = {}
+  local page, editing, saving, oldValue
+  local CHOICE_COLS = 3
+
+  local function close(commit)
+    local f = editing and page.fields[editing]
+    if f and not commit and oldValue ~= nil then f.data.value = oldValue end
+    editing, oldValue = nil, nil
+    t.show(page)
+  end
+
+  local function setNumber(f, v)
+    local d = f.data
+    local mult = d.mult or 1
+    v = math.max(d.min or 0, math.min(d.max or 255, v))
+    v = math.floor(v / mult + 0.5) * mult
+    if f.change then f:change(v, page) end
+    d.value = v
+  end
+
+  local function editSheet(k, f)
+    local d = f.data
+    local y0 = 196
+    LV.rect(k, 0, LV.Y1, LCD_W, LCD_H - LV.Y1, COLOR.bg, nil, { opacity = 150 })
+    LV.rect(k, 0, y0, LCD_W, LCD_H - y0, COLOR.panel)
+    LV.rect(k, 0, y0, LCD_W, 3, COLOR.accent)
+    local name = f.t or (page.skinName and page.skinName[editing]) or ""
+    local section = page.skinSection and page.skinSection[editing]
+    if section and f.t then name = section .. " - " .. name end -- e.g. "HSI Offset Gain - Pitch"
+    LV.text(k, 20, y0 + 30, 300, name, LV.fitFont(name, 300, MIDSIZE), COLOR.dim)
+    LV.text(k, 320, y0 + 30, 300, function() return LV.rf2.value(f) end, DBLSIZE, COLOR.white, CENTER)
+    LV.button(k, LCD_W - 12 - 130, y0 + 10, 130, 48, "Cancel", function() close(false) end, MIDSIZE)
+    local by = y0 + 70
+    if type(d.table) == "table" then
+      -- every choice as a button (scrolls when there are many)
+      local keys = {}
+      for key, _ in pairs(d.table) do
+        if type(key) == "number" and key >= (d.min or 0) and (d.max == nil or key <= d.max) then keys[#keys + 1] = key end
+      end
+      table.sort(keys)
+      local bw = math.floor((LCD_W - 24 - (CHOICE_COLS - 1) * 8) / CHOICE_COLS)
+      local kids = {}
+      for i, key in ipairs(keys) do
+        local label = tostring(d.table[key])
+        LV.button(kids, ((i - 1) % CHOICE_COLS) * (bw + 8), math.floor((i - 1) / CHOICE_COLS) * 64, bw, 56, label,
+          function()
+            d.value = key
+            if f.postEdit then f:postEdit(page) end
+            close(true)
+          end, LV.fitFont(label, bw - 12, MIDSIZE),
+          { color = function() return d.value == key and COLOR.accent or COLOR.barBg end })
+      end
+      k[#k + 1] = { type = "box", x = 12, y = by, w = LCD_W - 24, h = LCD_H - by - 8,
+        scrollDir = lvgl.SCROLL_VER, scrollBar = true, children = kids }
+    elseif type(d.value) == "number" then
+      local mult = d.mult or 1
+      local lo, hi = math.floor((d.min or 0) / mult), math.floor((d.max or 255) / mult)
+      LV.text(k, 20, by + 16, 200, LV.rf2.value({ data = { value = d.min or 0, scale = d.scale, unit = d.unit } }), SMLSIZE, COLOR.dim)
+      LV.text(k, LCD_W - 220, by + 16, 200, LV.rf2.value({ data = { value = d.max or 255, scale = d.scale, unit = d.unit } }),
+        SMLSIZE, COLOR.dim, RIGHT)
+      if hi > lo then
+        k[#k + 1] = { type = "slider", x = 30, y = by + 40, w = LCD_W - 60, min = lo, max = hi, color = COLOR.accent,
+          get = function() return math.floor((d.value or 0) / mult) end,
+          set = function(v) setNumber(f, v * mult) end }
+      end
+      local steps = { { "-10", -10 }, { "-1", -1 }, { "+1", 1 }, { "+10", 10 } }
+      local sy = by + 110
+      for i, s in ipairs(steps) do
+        LV.button(k, 12 + (i - 1) * 140, sy, 130, 64, s[1], function() setNumber(f, (d.value or 0) + s[2] * mult) end, MIDSIZE)
+      end
+      LV.button(k, LCD_W - 12 - 210, sy, 210, 64, "OK", function() close(true) end, MIDSIZE, { color = COLOR.accent })
+    else
+      k[#k + 1] = { type = "textEdit", x = 20, y = by + 20, w = LCD_W - 260, value = tostring(d.value or ""),
+        length = d.max or 10, set = function(s) d.value = s end }
+      LV.button(k, LCD_W - 12 - 210, by + 10, 210, 64, "OK", function() close(true) end, MIDSIZE, { color = COLOR.accent })
+    end
+  end
+
+  t.show = function(p)
+    page = p
+    local k = {}
+    LV.rect(k, 0, 0, LCD_W, LCD_H, COLOR.bg)
+    local actions = {}
+    if page.isReady and not page.readOnly then
+      actions[#actions + 1] = { text = "Save", w = 120, press = function()
+        if saving then return end
+        saving = true
+        page:write()
+      end, extra = { color = COLOR.accent } }
+    end
+    actions[#actions + 1] = { text = "Menu", w = 110, press = function()
+      LV.rf2.modal("Menu", nil, {
+        { text = "Reload", press = function() if rf2.reloadPage then rf2.reloadPage() end end },
+        { text = "Reboot FC", press = function()
+          rf2.mspQueue:add({ command = 68, processReply = function() end, simulatorResponse = {} }) -- MSP_REBOOT
+          t.show(page)
+        end },
+        { text = "Cancel", press = function() t.show(page) end },
+      })
+    end }
+    LV.rf2.header(k, page.title, page.isReady and "Tap a value to edit" or "Reading from the FC...",
+      function() if page.back then page.back() end end, actions)
+    saving = false
+
+    local fields = page.fields or {}
+    if page.isReady and #fields > 0 then
+      local model = rf2CardModel(page)
+      page.skinName, page.skinSection = model.name, {}
+      for _, c in ipairs(model.cards) do
+        for _, it in ipairs(c.items) do
+          if it.i and c.title then page.skinSection[it.i] = c.title.t end
+        end
+      end
+      local kids = {}
+      local dx = -10 -- the box starts at x 10
+      for _, c in ipairs(model.cards) do
+        LV.rect(kids, 10 + dx, c.y, RF2_CARD_W, c.h, COLOR.panel, 6)
+        if c.title then LV.text(kids, 22 + dx, c.y + 20, 500, c.title.t, 0, COLOR.accent) end
+        if c.kind == "table" then
+          for ci, col in ipairs(c.cols) do
+            LV.text(kids, c.cellX + (ci - 1) * (c.cellW + 6) + dx, c.headY + 12, c.cellW,
+              col.a.t .. (col.b and (" " .. col.b.t) or ""), SMLSIZE, COLOR.dim, CENTER)
+          end
+          for _, row in ipairs(c.rows) do
+            if row.head then LV.text(kids, 24 + dx, row.y + RF2_CELL_H / 2, 100, row.head.t, 0, COLOR.white) end
+          end
+        end
+        for _, it in ipairs(c.items) do
+          if it.rect then
+            local q = it.rect
+            LV.rect(kids, q[1] + dx, q[2], q[3], q[4], COLOR.barBg, 4)
+            LV.text(kids, q[1] + 14 + dx, q[2] + 41, q[3] - 20, function() return tostring(it.l.t) end, MIDSIZE, COLOR.dim)
+          end
+        end
+      end
+      for i, f in ipairs(fields) do
+        local q = model.pos[i]
+        if q then
+          local x, y, w, h = q[1] + dx, q[2], q[3], q[4]
+          local isBtn = f.t and string.sub(f.t, 1, 1) == "[" and not f.data
+          local editable = not f.readOnly and (isBtn or (f.data and f.data.value ~= nil))
+          if editable then
+            LV.button(kids, x, y, w, h, "", function()
+              if isBtn then
+                if f.preEdit then f.preEdit(f, page) end
+                return
+              end
+              editing, oldValue = i, f.data.value
+              t.show(page)
+            end, 0, { color = COLOR.barBg })
+          else
+            LV.rect(kids, x, y, w, h, COLOR.barBg, 4)
+          end
+          if isBtn then
+            LV.text(kids, x, y + h / 2, w, LV.rf2.value(f), LV.fitFont(LV.rf2.value(f), w - 16, MIDSIZE), COLOR.accent, CENTER)
+          elseif h >= RF2_TILE_H then
+            local name = f.t or model.name[i] or ""
+            LV.text(kids, x + 14, y + 13, w - 20, name, SMLSIZE, COLOR.dim)
+            LV.text(kids, x + 14, y + 41, w - 20, function() return LV.rf2.value(f) end, MIDSIZE,
+              f.readOnly and COLOR.dim or COLOR.white)
+          else
+            LV.text(kids, x, y + h / 2, w, function() return LV.rf2.value(f) end, MIDSIZE,
+              f.readOnly and COLOR.dim or COLOR.white, CENTER)
+          end
+        end
+      end
+      k[#k + 1] = { type = "box", x = 10, y = LV.Y1, w = LCD_W - 20, h = LCD_H - LV.Y1 - 4,
+        scrollDir = lvgl.SCROLL_VER, scrollBar = true, children = kids }
+    else
+      LV.text(k, 12, LCD_H / 2, LCD_W - 24, page.isReady and "Nothing on this page" or "Reading from the FC...",
+        MIDSIZE, COLOR.dim, CENTER)
+    end
+    if editing and fields[editing] then editSheet(k, fields[editing]) end
+    lvgl.clear()
+    lvgl.build(k)
+    LV.rf2.redraw = function() t.show(page) end
+  end
+  return t
+end
+
+LV.rf2.SKIN = {
+  ["LVGL/mainMenu"] = LV.rf2.mainMenu,
+  ["LVGL/page"] = LV.rf2.page,
+  ["LVGL/messageBox"] = LV.rf2.messageBox,
+  ["LVGL/popupMenu"] = LV.rf2.popupMenu,
+  ["LVGL/waitMessage"] = LV.rf2.waitMessage,
+}
+
+RF2UI.lvSkin = LV.rf2.SKIN -- read by startRf2Lvgl (TOOLS HOST, defined before LV)
 
 -- Frame timing (CONFIG.perfOverlay), bottom-right: fps, ms per frame in
 -- tick() and in drawing / the hosted tool, Lua heap in KB. getTime() is
