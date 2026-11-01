@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Runs RFTelem in the EdgeTX Companion 2.12 simulator (TX16S MK3, 800x480)
   with CONFIG.simulate = true, so the scripted flight in simulateTelemetry()
@@ -80,13 +80,13 @@ Set-ItemProperty $k sdPath $sdForward
 
 # --- 3. Widget files (simulate = true in the copy only) --------------------
 Copy-Item (Join-Path $root 'sdcard\*') $simSd -Recurse -Force
-$mainLua = Join-Path $simSd 'WIDGETS\RFTelem\main.lua'
-$src = [IO.File]::ReadAllText($mainLua)
+$coreLua = Join-Path $simSd 'WIDGETS\RFTelem\core.lua' # CONFIG lives in core.lua
+$src = [IO.File]::ReadAllText($coreLua)
 $patched = $src -replace '(?m)^(\s*simulate\s*=\s*)false,', '${1}true,'
-if ($patched -eq $src) { throw "Could not find 'simulate = false,' in main.lua" }
-[IO.File]::WriteAllText($mainLua, $patched, $utf8NoBom)
-# Force a recompile in case a stale main.luac is newer than the copy.
-Remove-Item -LiteralPath (Join-Path $simSd 'WIDGETS\RFTelem\main.luac') -ErrorAction SilentlyContinue
+if ($patched -eq $src) { throw "Could not find 'simulate = false,' in core.lua" }
+[IO.File]::WriteAllText($coreLua, $patched, $utf8NoBom)
+# Force a recompile in case stale .luac files are newer than the copies.
+Get-ChildItem (Join-Path $simSd 'WIDGETS\RFTelem') -Filter '*.luac' | Remove-Item -ErrorAction SilentlyContinue
 
 # --- 4. Theme option ------------------------------------------------------
 $modelYml = Join-Path $simSd 'MODELS\model1.yml'

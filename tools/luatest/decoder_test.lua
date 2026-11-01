@@ -20,6 +20,12 @@ local function noop() end
 lcd = { RGB = function() return 0 end, drawFilledRectangle = noop, drawText = noop, drawBitmap = noop,
         drawLine = noop, sizeText = function(t) return #t * 12, 27 end, loadBitmap = noop }
 Bitmap = { open = noop }
+LCD_W, LCD_H = 800, 480
+lvgl = assert(load(FILES["/luatest/lvglstub.lua"], "lvglstub"))().lvgl
+loadScript = function(path)
+  local src = FILES[path]
+  return src and assert(load(src, path)) or nil
+end
 getTime = function() return NOW end
 getDateTime = function() return { year = 2026, mon = 11, day = 1, hour = 1, min = 2 } end
 model = { getInfo = function() return { name = "S2 Ultra", bitmap = "" } end }
