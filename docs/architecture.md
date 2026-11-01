@@ -44,7 +44,7 @@
 | dashboard | `ARMD` ≠ 0 (遅延なし) | armwarning |
 | armwarning | `ARMD` = 0 | dashboard |
 | dashboard / armwarning | 切断 (接続済みだった後のみ) | flightlog |
-| flightlog | 切断から 60 秒経過、またはタップ (フルスクリーン時のみ届く) | standby |
+| flightlog | Close (ボタン / Enter / Close スイッチ)。時間では閉じない (CONFIG.flightLogTimeoutSec = 0) | standby |
 | flightlog | 再接続 | dashboard (`resetTelemetryState` 実行) |
 
 - armwarning の文言: `ARMD` = 67108872 → "ARM SWITCH WAS ON AT POWER-UP"、それ以外 → "ARMING DISABLED" + コード
@@ -115,7 +115,7 @@
 ## フライトログ (`drawFlightLog`)
 
 - 閉じ方: タイトル帯の Close ボタン (タップ、全画面時のみ) / Enter (全画面時のみ) /
-  オプション `Close` のスイッチ (立ち上がりで閉じる。`tick` で判定するので全画面でなくても効く) / 60 秒経過
+  オプション `Close` のスイッチ (立ち上がりで閉じる。`tick` で判定するので全画面でなくても効く)。時間制限なし
 
 - タイトル帯 (Flight log / 機体名 / Close ボタン) → 4 タブ × 2 段 (`drawTab`) → 統合折れ線グラフ 1 枚
 - 上段: Flight time / Max rpm (avg) / Max amps (avg) / Max power (V×A の最大)

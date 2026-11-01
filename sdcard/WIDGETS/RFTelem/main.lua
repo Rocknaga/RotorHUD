@@ -213,7 +213,7 @@ local CONFIG = {
   batteryProfile = {
     enabled     = true,
     labels      = { "Profile 1", "Profile 2", "Profile 3", "Profile 4", "Profile 5", "Profile 6" },
-    timeoutSec  = 15,   -- no input this long: keep the current profile
+    timeoutSec  = 0,    -- >0: no input this long keeps the current profile; 0 = stays until chosen or armed
     applyIdleSec = 3,   -- switch-stepping: apply after this long without a press
     retrySec    = 2,    -- resend if BAT# hasn't changed by then
     maxTries    = 3,
@@ -236,7 +236,7 @@ local CONFIG = {
   -- dismiss it sooner; this timeout is what makes the same behavior
   -- work even when the widget isn't full-screen and never gets touch
   -- events at all.
-  flightLogTimeoutSec = 60,
+  flightLogTimeoutSec = 0, -- >0: back to standby after this long; 0 = stays until closed or reconnected
 
   -- Model picture in the footer's side card (/IMAGES/<model name>.png).
   -- The file must be pre-sized to exactly modelImageW x modelImageH
@@ -1989,6 +1989,7 @@ local function drawFlightLog(wgt, y, w, h)
   if wgt.disconnectTime then
     remain = math.max(0, remain - math.floor((getTime() - wgt.disconnectTime) / 100))
   end
+  if CONFIG.flightLogTimeoutSec <= 0 then remain = nil end
   -- Close button: tap (full-screen only), Enter, or the "Close" option's
   -- switch all go back to standby (see refresh()/tick()). The countdown
   -- is the auto-close timeout.
@@ -1996,7 +1997,7 @@ local function drawFlightLog(wgt, y, w, h)
   local btnX, btnY = pad + panelW - 8 - btnW, y + (titleH - btnH) / 2
   drawChamferedRect(btnX, btnY, btnW, btnH, COLOR.barBg, COLOR.panel, 4)
   lcd.drawText(btnX + 14, btnY + btnH / 2, "Close", LEFT + VCENTER + SMLSIZE + COLOR.white)
-  lcd.drawText(btnX + btnW - 14, btnY + btnH / 2, remain .. "s", RIGHT + VCENTER + SMLSIZE + COLOR.dim)
+  if remain then lcd.drawText(btnX + btnW - 14, btnY + btnH / 2, remain .. "s", RIGHT + VCENTER + SMLSIZE + COLOR.dim) end
 
   -- Stats: two rows of four tabs
   -- statsFresh: this frame paid for the stats pass, so the charts (their
@@ -2153,7 +2154,8 @@ local function drawBattSelect(wgt, t, y, w, h)
     elseif touchHint() then
       hint = "Close switch: next profile  -  " .. touchHint() .. "  -  " .. math.max(0, left) .. "s"
     else
-      hint = "Tap a profile, or press the Close switch to step  -  keeps current in " .. math.max(0, left) .. "s"
+      hint = (cfg.timeoutSec > 0) and ("Tap a profile, or press the Close switch to step  -  keeps current in " .. math.max(0, left) .. "s")
+        or "Tap a profile, or press the Close switch to step  -  arming keeps the current one"
     end
   else
     hint = "Arming closes this screen"
@@ -3312,7 +3314,7 @@ local function bpUpdate(wgt, t, connected)
     end
     if bp.stepped and now - bp.lastInput >= cfg.applyIdleSec * 100 then
       bpApply(wgt, t)
-    elseif now - (bp.lastInput or bp.since) >= cfg.timeoutSec * 100 then
+    elseif cfg.timeoutSec > 0 and now - (bp.lastInput or bp.since) >= cfg.timeoutSec * 100 then
       wgt.bp = nil -- no answer: keep the current profile
     end
   elseif bp.phase == "send" then
@@ -3379,7 +3381,7 @@ local function tick(wgt)
       wgt.disconnectTime = getTime()
     end
     local disconnectedSec = (getTime() - wgt.disconnectTime) / 100
-    if disconnectedSec > CONFIG.flightLogTimeoutSec then
+    if CONFIG.flightLogTimeoutSec > 0 and disconnectedSec > CONFIG.flightLogTimeoutSec then
       wgt.showFlightLog = false
     end
   else
@@ -3423,6 +3425,19 @@ local function tick(wgt)
   end
   wgt.pageWasOn = pageOn
   if armedNow or not connected then wgt.infoView = nil end
+  -- The page follows the profile switches: when PID# / RTE# change while
+  -- it is open, the page is read again (MSP replies are for the FC's
+  -- current profile).
+  if wgt.infoView then
+    local prof = tostring(t.pidProfile) .. "/" .. tostring(t.bank)
+    if wgt.fcProf and wgt.fcProf ~= prof then
+      local cmd = FC.pages[wgt.infoView].cmd
+      wgt.fc = { [cmd] = CONFIG.simulate and FC.sim[cmd] or nil }
+    end
+    wgt.fcProf = prof
+  else
+    wgt.fcProf = nil
+  end
   return t, connected
 end
 
@@ -4720,7 +4735,7 @@ function LV.buildFcView(k, wgt, w, h, t, parsed)
   if page.cmd == 111 then sub = "Rate profile " .. (t.bank and fmt(t.bank, 0) or "--")
   elseif page.cmd ~= nil then sub = "PID profile " .. (t.pidProfile and fmt(t.pidProfile, 0) or "--") end
   if parsed and parsed.note then sub = sub .. "   " .. parsed.note end
-  LV.text(k, pad + 270, y + titleH / 2, 260, sub, SMLSIZE, COLOR.dim)
+  LV.text(k, pad + 270, y + titleH / 2, 270, sub, LV.fitFont(sub, 270, 0), COLOR.accent)
   LV.text(k, pad + panelW - 214, y + titleH / 2, 200, wgt.infoView .. " / " .. #FC.pages, SMLSIZE, COLOR.muted, RIGHT)
   -- full screen only (buttons): next page / close
   LV.button(k, pad + panelW - 8 - 100 - 8 - 100, y + 6, 100, titleH - 12, "Next", function()
@@ -5017,7 +5032,8 @@ function LV.update(wgt, t, screen, connected, armed)
         left = cfg.applyIdleSec - math.floor((now - bp.lastInput) / 100)
         v.bpHint = "Applies " .. bp.sel .. " in " .. math.max(0, left) .. "s  -  press again for the next"
       else
-        v.bpHint = "Tap a profile, or press the Close switch to step  -  keeps current in " .. math.max(0, left) .. "s"
+        v.bpHint = (cfg.timeoutSec > 0) and ("Tap a profile, or press the Close switch to step  -  keeps current in " .. math.max(0, left) .. "s")
+          or "Tap a profile, or press the Close switch to step  -  arming keeps the current one"
       end
     else
       v.bpHint = "Arming closes this screen"
@@ -5025,7 +5041,7 @@ function LV.update(wgt, t, screen, connected, armed)
   elseif screen == "flightlog" then
     local remain = CONFIG.flightLogTimeoutSec
     if wgt.disconnectTime then remain = math.max(0, remain - math.floor((getTime() - wgt.disconnectTime) / 100)) end
-    v.closeText = "Close  " .. remain .. "s"
+    v.closeText = (CONFIG.flightLogTimeoutSec > 0) and ("Close  " .. remain .. "s") or "Close"
   end
 
   if screen == "settings" and wgt.settings then
@@ -5125,7 +5141,7 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
       end
       parsed = wgt.fcParsed
     end
-    sub = wgt.infoView .. ":" .. tostring(buf)
+    sub = wgt.infoView .. ":" .. tostring(buf) .. ":" .. tostring(wgt.fcProf)
   elseif screen == "settings" then
     sub = "set:" .. wgt.settings.group
   end
