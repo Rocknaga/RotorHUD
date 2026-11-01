@@ -754,9 +754,115 @@ local function newAlarmState()
   return { prev = {}, active = {}, since = {}, fired = {}, lastFire = {}, sayFirst = {} }
 end
 
+-- ============================== USER SETTINGS =============================
+-- Settings changed on the radio by touch (Menu > Settings, full screen),
+-- kept on the SD card in SETTINGS_FILE as key=value lines and loaded at
+-- start. A value set here wins over the matching widget option (Theme,
+-- Voice, BattLand) and over CONFIG. To add a setting: one entry in
+-- SETTINGS (group = the tab it shows in), with apply() putting the value
+-- where the code reads it; the Settings screen (LVGL VIEW) lists it.
+local SETTINGS_FILE = "/WIDGETS/RFTelem/settings.txt"
+local USER = {}
+local SETTINGS_GROUPS = { "Voice", "Alarms", "Display" }
+local SETTINGS = {
+  { key = "voice", group = "Voice", label = "Voice", kind = "choice", choices = CONFIG.alarm.voiceLabels,
+    option = "Voice", test = true },
+  { key = "alarms", group = "Voice", label = "Alarms", kind = "bool",
+    default = CONFIG.alarm.enabled, apply = function(v) CONFIG.alarm.enabled = v end },
+  { key = "haptic", group = "Voice", label = "Vibration", kind = "bool",
+    default = true, apply = function(v) CONFIG.alarm.haptic = v end },
+  { key = "battLand", group = "Alarms", label = "Land at battery", kind = "number", min = 10, max = 50, step = 5,
+    unit = "%", option = "BattLand", default = CONFIG.alarm.battLand },
+  { key = "cellCaution", group = "Alarms", label = "Cell caution", kind = "number", min = 3.30, max = 3.90,
+    step = 0.05, decimals = 2, unit = "V", default = CONFIG.alarm.cellCaution,
+    apply = function(v) CONFIG.alarm.cellCaution, CONFIG.vCellWarn = v, v end },
+  { key = "cellCritical", group = "Alarms", label = "Cell critical", kind = "number", min = 3.20, max = 3.80,
+    step = 0.05, decimals = 2, unit = "V", default = CONFIG.alarm.cellCritical,
+    apply = function(v) CONFIG.alarm.cellCritical = v end },
+  { key = "escCaution", group = "Alarms", label = "ESC caution", kind = "number", min = 60, max = 120, step = 5,
+    unit = "\194\176C", default = CONFIG.alarm.escCaution, apply = function(v) CONFIG.alarm.escCaution = v end },
+  { key = "escCritical", group = "Alarms", label = "ESC critical", kind = "number", min = 70, max = 130, step = 5,
+    unit = "\194\176C", default = CONFIG.alarm.escCritical, apply = function(v) CONFIG.alarm.escCritical = v end },
+  { key = "becCritical", group = "Alarms", label = "BEC critical", kind = "number", min = 4.5, max = 8.0, step = 0.1,
+    decimals = 1, unit = "V", default = CONFIG.alarm.becCritical, apply = function(v) CONFIG.alarm.becCritical = v end },
+  { key = "theme", group = "Display", label = "Theme", kind = "choice", choices = { "Color", "Mono", "Cyan" },
+    option = "Theme" },
+  { key = "perf", group = "Display", label = "Frame rate", kind = "bool",
+    default = CONFIG.perfOverlay, apply = function(v) CONFIG.perfOverlay = v end },
+  { key = "modelImage", group = "Display", label = "Model picture", kind = "bool",
+    default = CONFIG.showModelImage, apply = function(v) CONFIG.showModelImage = v end },
+}
+
+-- current value: the user's, else the widget option, else the default
+local function settingValue(wgt, def)
+  local u = USER[def.key]
+  if u ~= nil then return u end
+  local o = def.option and wgt and wgt.options and wgt.options[def.option]
+  if o ~= nil and (def.kind ~= "number" or (o >= def.min and o <= def.max)) then
+    return math.floor(o)
+  end
+  if def.kind == "choice" then return 0 end
+  return def.default
+end
+
+local function saveSettings()
+  pcall(function()
+    local f = io.open(SETTINGS_FILE, "w")
+    if not f then return end
+    for _, def in ipairs(SETTINGS) do
+      local v = USER[def.key]
+      if v ~= nil then
+        if type(v) == "boolean" then v = v and 1 or 0 end
+        io.write(f, def.key, "=", tostring(v), "\n")
+      end
+    end
+    io.close(f)
+  end)
+end
+
+local function loadSettings()
+  pcall(function()
+    local f = io.open(SETTINGS_FILE, "r")
+    if not f then return end
+    local text = io.read(f, 2048) or ""
+    io.close(f)
+    for key, val in string.gmatch(text, "([%w_]+)=([%-%d%.]+)") do
+      for _, def in ipairs(SETTINGS) do
+        if def.key == key then
+          local n = tonumber(val)
+          if n then USER[key] = (def.kind == "bool") and (n ~= 0) or n end
+        end
+      end
+    end
+  end)
+  for _, def in ipairs(SETTINGS) do
+    if def.apply and USER[def.key] ~= nil then def.apply(USER[def.key]) end
+  end
+end
+
+local function setSetting(def, v)
+  if def.kind == "number" then
+    v = math.max(def.min, math.min(def.max, v))
+    v = math.floor(v / def.step + 0.5) * def.step
+    if def.decimals then v = tonumber(string.format("%." .. def.decimals .. "f", v)) end
+  end
+  USER[def.key] = v
+  if def.apply then def.apply(v) end
+  saveSettings()
+end
+
+local function settingText(wgt, def)
+  local v = settingValue(wgt, def)
+  if def.kind == "bool" then return v and "On" or "Off" end
+  if def.kind == "choice" then return def.choices[(v or 0) + 1] or def.choices[1] end
+  if v == nil then return "--" end
+  return string.format("%." .. (def.decimals or 0) .. "f", v) .. (def.unit or "")
+end
+
 -- ============================== WIDGET API ================================
 
 local function create(zone, options)
+  loadSettings()
   return {
     zone = zone,
     options = options,
@@ -1660,7 +1766,7 @@ local function drawStandby(wgt, y, w, h)
   local ty, tabH = sy + sh + pad, 62
   drawChamferedRect(pad, ty, panelW, tabH, COLOR.panel, COLOR.bg, 6)
   local txPct, txV = getTxBatteryPct()
-  local voiceIdx = math.floor((wgt.options and wgt.options.Voice) or 0)
+  local voiceIdx = math.floor(USER.voice or (wgt.options and wgt.options.Voice) or 0)
   local labels = CONFIG.alarm.voiceLabels
   local alarmsValue, alarmsColor = "On", COLOR.green
   if not CONFIG.alarm.enabled then
@@ -2461,7 +2567,7 @@ local function isMuted(wgt)
 end
 
 local function playPattern(pattern)
-  if not playHaptic then return end
+  if not playHaptic or CONFIG.alarm.haptic == false then return end
   for i = 1, #pattern do playHaptic(pattern[i][1], pattern[i][2]) end
 end
 
@@ -2469,7 +2575,8 @@ end
 -- into CONFIG.alarm.voiceSets; out of range falls back to the first set).
 local function voiceSetDir(wgt)
   local sets = CONFIG.alarm.voiceSets
-  local idx = wgt.options and wgt.options.Voice
+  local idx = USER.voice
+  if idx == nil then idx = wgt.options and wgt.options.Voice end
   idx = idx and math.floor(idx) or 0
   return sets[idx + 1] or sets[1]
 end
@@ -2553,7 +2660,8 @@ end
 
 -- Landing threshold in % from the "BattLand" option (10-50), else CONFIG.
 local function battLandPct(wgt)
-  local v = wgt.options and wgt.options.BattLand
+  local v = USER.battLand
+  if v == nil then v = wgt.options and wgt.options.BattLand end
   if v and v >= 10 and v <= 50 then return math.floor(v) end
   return CONFIG.alarm.battLand
 end
@@ -4017,6 +4125,7 @@ local MENU_ITEMS = {
   { key = "elrs", label = "ExpressLRS" },
   { key = "batt", label = "Battery profile" },
   { key = "view", label = "View FC settings" },
+  { key = "settings", label = "Settings" },
 }
 
 -- Whether a menu item can be used now, and why not.
@@ -4027,6 +4136,8 @@ local function menuItemState(wgt, t, connected, key)
     return false, "lcd tool - use SYS > Tools"
   elseif key == "elrs" then
     return crossfireTelemetryPush ~= nil and crossfireTelemetryPush() ~= nil, "no CRSF module"
+  elseif key == "settings" then
+    return CONFIG.lvgl and lvgl ~= nil, "lvgl display only"
   elseif key == "view" then
     return connected and CONFIG.lvgl and lvgl ~= nil, "needs the model connected"
   end
@@ -4039,6 +4150,10 @@ local function openMenuItem(wgt, t, connected, key)
   wgt.menu = nil
   if key == "batt" then
     wgt.bp = { phase = "pick", sel = t.battProfile, since = getTime() }
+    return
+  end
+  if key == "settings" then
+    wgt.settings = { group = SETTINGS_GROUPS[1] }
     return
   end
   if key == "view" then
@@ -4324,6 +4439,9 @@ function LV.buildStandby(k, wgt, w, h)
   LV.rect(k, pad, sy, panelW, sh, COLOR.panel, 6)
   LV.text(k, pad + 16, sy + 22, panelW / 2, LV.dv("waiting", ""), MIDSIZE, COLOR.white)
   LV.text(k, pad + panelW / 2, sy + 22, panelW / 2 - 16, LV.dv("standbyHint", ""), SMLSIZE, COLOR.dim, RIGHT)
+  -- full screen only (a button): covers the hint, which then isn't needed
+  LV.rect(k, pad + panelW - 130, sy + 4, 126, 40, COLOR.panel, nil, { visible = function() return LV.v.full end })
+  LV.button(k, pad + panelW - 120, sy + 6, 104, 36, "Menu", function() wgt.menu = { sel = 1 } end, 0)
   local trackX, trackW, trackY = pad + 16, panelW - 32, sy + sh - 9
   LV.rect(k, trackX, trackY, trackW, 3, COLOR.barBg)
   LV.rect(k, trackX, trackY, 120, 3, COLOR.accent, nil, {
@@ -4581,6 +4699,63 @@ function LV.buildFcView(k, wgt, w, h, t, parsed)
     "Read only  -  Page switch: next page  -  edit: full screen > Menu > Rotorflight settings", SMLSIZE, COLOR.dim)
 end
 
+-- Settings (full screen only: everything here is a button). Group tabs on
+-- the left, the group's SETTINGS on the right; values save at once.
+function LV.buildSettings(k, wgt, w, h)
+  local pad, y = 12, 12
+  local panelW = w - pad * 2
+  local titleH = 48
+  LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
+  LV.text(k, pad + 14, y + titleH / 2, 300, "Settings", MIDSIZE, COLOR.white)
+  LV.text(k, pad + 200, y + titleH / 2, 330, "Saved on the SD card (over widget options)", SMLSIZE, COLOR.dim)
+  LV.button(k, pad + panelW - 8 - 110, y + 6, 110, titleH - 12, "Close", function() wgt.settings = nil end, 0)
+  local cy = y + titleH + pad
+  local ch = h - pad - cy
+  local tabW = 170
+  LV.rect(k, pad, cy, tabW, ch, COLOR.panel, 6)
+  for i, g in ipairs(SETTINGS_GROUPS) do
+    LV.button(k, pad + 8, cy + 8 + (i - 1) * 64, tabW - 16, 56, g, function() wgt.settings.group = g end, MIDSIZE, {
+      color = function() return (wgt.settings and wgt.settings.group == g) and COLOR.accent or COLOR.barBg end })
+  end
+  local rx, rw = pad + tabW + pad, panelW - tabW - pad
+  LV.rect(k, rx, cy, rw, ch, COLOR.panel, 6)
+  local x0 = rx + 230
+  local row = 0
+  for _, def in ipairs(SETTINGS) do
+    if def.group == wgt.settings.group then
+      local ry = cy + 10 + row * 60
+      row = row + 1
+      local mid = ry + 26
+      LV.text(k, rx + 16, mid, 230, def.label, 0, COLOR.white)
+      local key = "set_" .. def.key
+      if def.kind == "number" then
+        LV.button(k, x0, ry, 64, 52, "-", function() setSetting(def, settingValue(wgt, def) - def.step) end, MIDSIZE)
+        LV.text(k, x0 + 72, mid, 160, LV.dv(key, ""), MIDSIZE, COLOR.white, CENTER)
+        LV.button(k, x0 + 240, ry, 64, 52, "+", function() setSetting(def, settingValue(wgt, def) + def.step) end, MIDSIZE)
+      elseif def.kind == "bool" then
+        LV.button(k, x0, ry, 200, 52, "", function() setSetting(def, not settingValue(wgt, def)) end, MIDSIZE, {
+          text = LV.dv(key, ""),
+          color = function() return settingValue(wgt, def) and COLOR.accent or COLOR.barBg end })
+      elseif #def.choices <= 3 then
+        for c, label in ipairs(def.choices) do
+          LV.button(k, x0 + (c - 1) * 108, ry, 100, 52, label, function() setSetting(def, c - 1) end, 0, {
+            color = function() return settingValue(wgt, def) == c - 1 and COLOR.accent or COLOR.barBg end })
+        end
+      else
+        local n = #def.choices
+        LV.button(k, x0, ry, 64, 52, "<", function() setSetting(def, (settingValue(wgt, def) - 1) % n) end, MIDSIZE)
+        LV.text(k, x0 + 68, mid, 128, LV.dv(key, ""), 0, COLOR.white, CENTER)
+        LV.button(k, x0 + 200, ry, 64, 52, ">", function() setSetting(def, (settingValue(wgt, def) + 1) % n) end, MIDSIZE)
+        if def.test then
+          LV.button(k, x0 + 274, ry, 84, 52, "Test", function()
+            if playFile then playFile(CONFIG.alarm.dir .. voiceSetDir(wgt) .. "/armed.wav") end
+          end, 0)
+        end
+      end
+    end
+  end
+end
+
 -- small zones (not the 800x480 layout): headspeed + pack voltage
 function LV.buildSmall(k, wgt, w, h)
   LV.rect(k, 0, 0, w, h, COLOR.bg)
@@ -4590,7 +4765,7 @@ end
 
 -- menu card over standby / dashboard (Rotorflight / ExpressLRS / battery)
 function LV.buildMenu(k, wgt, w, h)
-  local mw, rowH = 460, 64
+  local mw, rowH = 460, 56
   local mh = 56 + #MENU_ITEMS * (rowH + 8) + 56
   local mx, my = math.floor((w - mw) / 2), math.floor((h - mh) / 2)
   local vis = function() return wgt.menu ~= nil end
@@ -4631,6 +4806,8 @@ function LV.build(wgt, screen, t, parsed)
     LV.buildFlightLog(k, wgt, w, h)
   elseif screen == "fcview" then
     LV.buildFcView(k, wgt, w, h, t, parsed)
+  elseif screen == "settings" then
+    LV.buildSettings(k, wgt, w, h)
   else
     LV.buildDashboard(k, wgt, w, h)
   end
@@ -4647,6 +4824,8 @@ end
 function LV.update(wgt, t, screen, connected, armed)
   local v = LV.v
   v.connected, v.armed = connected, armed
+  local okFull, full = pcall(lvgl.isFullScreen)
+  v.full = okFull and full or false
   local info = model and model.getInfo and model.getInfo()
   v.model = info and info.name or ""
   if wgt.toolMsg and getTime() - wgt.toolMsg.at <= 300 then v.toolMsg = wgt.toolMsg.text
@@ -4670,7 +4849,7 @@ function LV.update(wgt, t, screen, connected, armed)
     v.lastFlight = (wgt.flightSeconds or 0) > 0 and fmtTime(wgt.flightSeconds) or "--"
     v.lastUsed = wgt.maxCapacity and (fmt(wgt.maxCapacity, 0) .. "mAh") or ""
     local labels = CONFIG.alarm.voiceLabels
-    local voiceIdx = math.floor((wgt.options and wgt.options.Voice) or 0)
+    local voiceIdx = math.floor(USER.voice or (wgt.options and wgt.options.Voice) or 0)
     v.voice = labels[voiceIdx + 1] or labels[1]
     if not CONFIG.alarm.enabled then v.alarms, v.alarmsColor = "Off", COLOR.grey
     elseif wgt.alarmMuted then v.alarms, v.alarmsColor = "Muted", COLOR.orange
@@ -4755,6 +4934,11 @@ function LV.update(wgt, t, screen, connected, armed)
     v.closeText = "Close  " .. remain .. "s"
   end
 
+  if screen == "settings" and wgt.settings then
+    for _, def in ipairs(SETTINGS) do
+      if def.group == wgt.settings.group then v["set_" .. def.key] = settingText(wgt, def) end
+    end
+  end
   if wgt.menu then
     local notes = {}
     for i, item in ipairs(MENU_ITEMS) do
@@ -4767,6 +4951,7 @@ function LV.update(wgt, t, screen, connected, armed)
 end
 
 function LV.screenType(wgt, t)
+  if wgt.settings then return "settings" end
   if not isTelemetryConnected(t) then return wgt.showFlightLog and "flightlog" or "standby" end
   if wgt.armWarningActive then return "armwarning" end
   if wgt.bp and wgt.bp.phase ~= "wait" then return "battselect" end
@@ -4812,6 +4997,7 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
     end
   end
 
+  if wgt.settings and (armed or not full) then wgt.settings = nil end
   local screen = (h < 160) and "small" or LV.screenType(wgt, t)
   wgt.lastScreenType = screen
   if (armed or (screen ~= "standby" and screen ~= "dashboard")) then wgt.menu = nil end
@@ -4827,7 +5013,8 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
       elseif event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then wgt.bp = nil end
     elseif screen == "flightlog" and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
       wgt.showFlightLog = false
-    elseif screen == "dashboard" and not armed and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
+    elseif (screen == "dashboard" or screen == "standby") and not armed
+           and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
       wgt.menu = { sel = 1 }
     end
   end
@@ -4845,6 +5032,8 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
       parsed = wgt.fcParsed
     end
     sub = wgt.infoView .. ":" .. tostring(buf)
+  elseif screen == "settings" then
+    sub = "set:" .. wgt.settings.group
   end
   if wgt.lvScreen ~= screen or wgt.lvTheme ~= COLOR or wgt.lvW ~= w or wgt.lvH ~= h or wgt.lvFull ~= full
      or wgt.lvSub ~= sub
@@ -4904,7 +5093,8 @@ local function refresh(wgt, event, touchState)
   -- frame, without needing to thread a theme parameter through each
   -- one individually.
   do
-    local idx = (wgt.options and wgt.options.Theme) or nil
+    local idx = USER.theme
+    if idx == nil then idx = (wgt.options and wgt.options.Theme) or nil end
     if idx ~= nil then
       idx = math.floor(idx)
       if idx < 0 or idx > 2 then idx = 0 end
