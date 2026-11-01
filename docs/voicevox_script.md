@@ -14,6 +14,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1 
 ```
 
 - 出力: `sdcard/SOUNDS/rf/<set>/<file>.wav` (32 kHz / 16 bit / モノラル PCM)。deploy.ps1 で SD へコピーされる
+- 音量: VOICEVOX の出力は RMS -22〜-28 dBFS で実機では小さかったため、生成時に RMS -14 dBFS へ揃え、
+  0.7 FS 超は tanh ソフトリミッターで割れを防ぐ (`-TargetRmsDb` で変更。既存ファイルだけ揃えるときは `-NormalizeOnly`)
 - ウィジェットのオプション **Voice** (0〜5) で声を選ぶ。`CONFIG.alarm.voiceSets` の並びは voicesets.csv の index と一致させる
 
 | Voice | フォルダ | 話者 (VOICEVOX スタイル ID) |
@@ -35,14 +37,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\voice\make_voices.ps1 
 | group | ファイル | 鳴るとき |
 |---|---|---|
 | governor | gov_* | ガバナー状態が変わったとき (LOST-HS は critical) |
-| profile | bank1–6 / profile1–6 | バンク (RTE#) / プロファイル (PID#) が変わったとき。接続直後にも現在値を 1 回 |
+| profile | bank1–6 (「レート、N」) / profile1–6 | レート (RTE#) / プロファイル (PID#) が変わったとき。接続直後にも現在値を 1 回 |
 | link | connected / disconnected | テレメトリー接続時 / 停止中の切断時 (回転中の切断は telemetry_lost) |
 | battery | batt000–100 (10% 刻み) | 回転中に残量が 10% の区切りを下回ったとき (着陸指示の +10% 以内は注意の振動つき) |
 | arm | armed / disarmed | ARM 状態が変わったとき。接続直後にも現在値を 1 回 |
 | arm | arm_switch_on / arm_disabled | ARMD ≠ 0 になったとき (注意: 短い振動つき)。67108872 は arm_switch_on |
 | caution | cell_low / esc_hot / flight_time | 注意: 短い振動 + 1 回 |
 | critical | cell_critical / esc_critical / bec_low / gov_losths / gov_fallback / telemetry_lost | 危険: 振動パターン + 10 秒ごとに繰り返し |
-| critical | batt005–100 (5% 刻み) + land | 残量が `BattLand` (既定 20%) 以下: 「バッテリー、20パーセント」「着陸してください」を繰り返し |
+| critical | batt000–050 (1% 刻み) + land | 残量が `BattLand` (既定 20%) 以下: その時の残量 +「着陸してください」を 20 秒ごと。以後 1% 下がるごとに残量を読み上げ |
 | armd | armd_* (27 種) | ARM 不可の理由。arm_disabled の後に最大 2 つ ([rotorflight_notes.md](rotorflight_notes.md)) |
 | native | rfbatt / rfcell | 案C の EdgeTX 標準機能用 ([alarms_native.md](alarms_native.md)) |
 | profile | battprofile1–6 / battprofile_select | BAT# が変わったとき (接続直後にも現在値)。選択画面を出したとき |

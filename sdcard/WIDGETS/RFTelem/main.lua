@@ -2540,11 +2540,11 @@ local function runAlarms(wgt, t, running, connected)
       t.perCellVoltage >= cfg.cellCritical + cfg.cellHyst, cfg.cellSustainSec)
   critical(wgt, "cellCrit", cellCrit, "cell_critical")
 
-  -- "Battery NN%, land now": NN is the threshold rounded to the 5% voice
-  -- files (batt005..batt100).
+  -- "Battery NN%, land now" with NN = the charge at the time it's said
+  -- (1% voice files exist for 0-50, the BattLand range).
   local battCrit = not cfg.nativeBackup and running and t.charge ~= nil and t.charge <= landPct
-  critical(wgt, "battCrit", battCrit,
-    { string.format("batt%03d", math.floor(landPct / 5 + 0.5) * 5), "land" }, cfg.battRepeatSec)
+  local battNow = t.charge and math.max(0, math.min(100, math.floor(t.charge))) or 0
+  critical(wgt, "battCrit", battCrit, { string.format("batt%03d", battNow), "land" }, cfg.battRepeatSec)
 
   local escCrit = t.temp ~= nil and
     latch(a, "escCrit", t.temp >= cfg.escCritical, t.temp < cfg.escCritical - cfg.escHyst, 0)
@@ -2614,6 +2614,19 @@ local function runAlarms(wgt, t, running, connected)
         local tier = (pct <= landPct + 10) and "caution" or "info"
         alert(wgt, tier, string.format("batt%03d", pct))
       end
+    end
+  end
+
+  -- At or below the landing threshold: every 1% drop is called out (the
+  -- critical above keeps the haptic + "land now" every battRepeatSec).
+  -- The first reading only seeds the counter - the critical just said it.
+  if running and t.charge and t.charge <= landPct then
+    local last = a.prev.battPct
+    if last == nil or battNow > last then
+      a.prev.battPct = battNow
+    elseif battNow < last then
+      a.prev.battPct = battNow
+      alert(wgt, "info", string.format("batt%03d", battNow))
     end
   end
 end
