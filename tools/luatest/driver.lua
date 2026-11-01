@@ -3,7 +3,7 @@
 --       "draw" -> report out-of-screen draw calls, "voiceN" -> Voice option N,
 --       "droplink" / "lowbatt" / "native" / "armdthr" / "fallback" -> scenario patches.
 NOW = 0
-selOpt = nil
+selOpt, swOpt = nil, nil
 local opts = {}
 for a in string.gmatch(ARGS or "", "%S+") do opts[a] = true end
 
@@ -72,6 +72,9 @@ getValue = function(src)
   if src == 999 then return muteVal end
   -- "selN": BattSel source = 6-pos switch at position N (EdgeTX 6POS values)
   if src == 997 then return ({ -1024, -614, -205, 205, 614, 1024 })[selOpt] or 0 end
+  -- "swN": MK3 button SWN on (2-position switches SW1..SW6)
+  local swn = type(src) == "string" and src:match("^SW(%d)$")
+  if swn then return (tonumber(swn) == swOpt) and 1024 or -1024 end
   -- "bpprev": BattPrev pressed once at 13.0s (picker 12..17s): 1 -> 6
   if src == 996 then return (opts.bpprev and NOW >= 1300 and NOW < 1320) and 1024 or -1024 end
   -- "close": Close switch pressed for 0.5s at 90s (flight log is up 75..135s)
@@ -127,6 +130,8 @@ local voiceOpt, landOpt = 0, 20
 for a in pairs(opts) do
   local sp = a:match("^sel(%d)$")
   if sp then selOpt = tonumber(sp) end
+  local sw = a:match("^sw(%d)$")
+  if sw then swOpt = tonumber(sw) end
   local n = a:match("^voice(%d+)$")
   if n then voiceOpt = tonumber(n) end
   local l = a:match("^land(%d+)$")
@@ -134,7 +139,7 @@ for a in pairs(opts) do
 end
 local wgt = widget.create({ x = 0, y = 0, w = 800, h = 480 },
   { Theme = 0, Mute = 999, Voice = voiceOpt, Close = 998, BattLand = landOpt,
-    BattSel = selOpt and 997 or 0, BattPrev = 996 })
+    BattSel = selOpt and 997 or 0, BattPrev = 996, BattSW = swOpt and 1 or 0 })
 wgtRef = wgt
 
 -- Lua instructions per refresh() (EdgeTX aborts a frame with "CPU limit"

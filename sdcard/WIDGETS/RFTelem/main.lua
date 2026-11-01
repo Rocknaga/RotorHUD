@@ -2701,6 +2701,29 @@ local function bpSourceProfile(wgt)
   return math.max(1, math.min(6, math.floor((v + 1024) / 2048 * 6) + 1))
 end
 
+-- "BattSW" option (TX16S MK3): the six buttons SW1..SW6 are separate
+-- 2-position switches (radio.yml switchConfig), not one 6-pos source - so
+-- BattSel on one of them could only ever read profile 1 (off) or 6 (on),
+-- which is what the radio did. With BattSW on, the button that is ON picks
+-- the profile (SWn = profile n); if several are on, the one switched on
+-- most recently wins. Nil when the option is off or no button is on.
+local FUNC_SWITCHES = { "SW1", "SW2", "SW3", "SW4", "SW5", "SW6" }
+
+local function bpFuncSwitchProfile(wgt)
+  if not (wgt.options and wgt.options.BattSW == 1) then return nil end
+  wgt.fsPrev = wgt.fsPrev or {}
+  local first
+  for i = 1, #FUNC_SWITCHES do
+    local ok, v = pcall(getValue, FUNC_SWITCHES[i])
+    local on = ok and type(v) == "number" and v > 0
+    if on and not wgt.fsPrev[i] then wgt.fsLast = i end -- just switched on
+    wgt.fsPrev[i] = on
+    if on and not first then first = i end
+  end
+  if wgt.fsLast and wgt.fsPrev[wgt.fsLast] then return wgt.fsLast end
+  return first
+end
+
 -- Inputs: step (switch press / rotary), choose (tap / Enter), dismiss.
 local function bpStep(wgt, dir)
   local bp = wgt.bp
@@ -2739,7 +2762,7 @@ local function bpUpdate(wgt, t, connected)
     -- Selector source: its position is the choice. Read on entry too, so a
     -- 6-pos button set before power-up is applied applyIdleSec after the
     -- link comes up without touching anything (same profile -> "same").
-    local sp = bpSourceProfile(wgt)
+    local sp = bpFuncSwitchProfile(wgt) or bpSourceProfile(wgt)
     if sp and sp ~= bp.srcLast then
       bp.srcLast, bp.sel, bp.lastInput, bp.stepped = sp, sp, now, true
     end
@@ -2928,8 +2951,10 @@ end
 -- "BattLand" is the remaining-% that triggers the repeating "battery NN%,
 -- land now" alarm (10-50, default 20).
 -- "BattSel" (optional) picks the battery profile with a multi-position
--- source - e.g. the TX16S 6-pos buttons: button N = profile N, applied 3s
--- after connecting. Works without full-screen mode.
+-- source - a pot or slider cut into 6 bands, applied 3s after connecting.
+-- Not for one of the MK3 SW1..SW6 buttons (2-position: only 1 or 6) -
+-- use "BattSW" for those. Both work without full-screen mode.
+-- "BattSW" (on/off): SW1..SW6 pick the profile, button n = profile n.
 -- "BattPrev" (optional) steps the picker back one profile ("Close" steps
 -- forward) - meant for a trim button through a logical switch.
 local options = {
@@ -2940,6 +2965,7 @@ local options = {
   { "BattLand", VALUE, 20, 10, 50 },
   { "BattSel", SOURCE, 0 },
   { "BattPrev", SOURCE, 0 },
+  { "BattSW", BOOL, 0 },
 }
 
 return {
