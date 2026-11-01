@@ -367,6 +367,7 @@ local CONFIG = {
       saved      = { { 1200, 60, 20 }, { 1800, 120, 0 } },         -- FC settings saved
     },
     hapticCaution  = { { 30, 0 } },
+    hapticSaved    = { { 40, 60 }, { 40, 0 } }, -- FC settings saved: two short pulses
     hapticCritical = { { 60, 30 }, { 60, 30 }, { 60, 0 } },
     -- Option C: set true when the EdgeTX logical-switch backup
     -- (docs/alarms_native.md) covers low battery / low cell, so the
@@ -5386,7 +5387,8 @@ function LV.rf2.page()
     local sp = LV.rf2.savePending
     if sp and page.isReady and sp.page ~= page and sp.title == page.title then
       LV.rf2.savePending, LV.rf2.savedAt = nil, getTime() -- reloaded after the save: it went through
-      playEffect(nil, "saved")
+      playEffect(nil, "saved")                -- beep (Settings > Voice > Sound effects)
+      playPattern(CONFIG.alarm.hapticSaved)   -- and vibration (Settings > Voice > Vibration)
     elseif sp and getTime() - sp.at > 1000 then
       LV.rf2.savePending = nil -- no reload within 10 s: say nothing
     end
