@@ -87,6 +87,14 @@
   (1 フレーム 1 ファイル、終わると 1 を返す) を返し、終了時に `refresh` が開き直す
 - `refresh` 冒頭: `wgt.hosted` があれば、ARM → 閉じる / 全画面でない → 閉じる / RTN 2 回 (1 秒以内) → 閉じる /
   それ以外は `run(event, touchState)` を呼んで return (ウィジェットの描画はしない)。0 以外が返ったら閉じる
+- RF2 の GUI 化 (`rf2SkinInstall`、`CONFIG.tools.rf2Skin`): `rf2.executeScript` を包み、`LCD/shared` `LCD/waitMessage`
+  `LCD/messageBox` `LCD/popupMenu` `LCD/mainMenu` `LCD/page` を `RF2_SKIN` の関数 (`rf2Skin*`) に差し替える。
+  ui_lcd.lua の状態遷移・MSP・保存はそのまま。各モジュールは描画しながら `RF2UI.hits` にタップ領域
+  `{x, y, w, h, fn, ev}` を積み、`refresh` が次のフレームで `rf2SkinInput` によりタップを照合して fn を実行し、
+  ev (ENTER / EXIT / ENTER_LONG / PAGE) を ui_lcd に渡す。後に積んだもの (ポップアップ・タイトル帯) が優先。
+  ページの配置は RF2 の 800×480 テンプレートの座標を、タイトル帯 (60px) の下へずらしたもの (`Page.skinDy`)。
+  表の枠幅は同じ行の次の項目まで (`Page.skinW`)。ポップアップは `RF2UI.backdrop` (直前の画面) の上に描く
+  (ウィジェットは毎フレーム全描画のため)
 - `stopTool`: `wgt.hosted`・`wgt.menu` と RF2 の唯一のグローバル `rf2` を消して GC。エラーは `wgt.toolMsg` で 3 秒表示
   (シミュレータでは /LOGS/rftelem_alarms.log にも)
 - ホスト中は `rfTelemetryPump` と `rfMspUpdate` が止まる (ツールが `crossfireTelemetryPop` の全フレームを受け取るため)。

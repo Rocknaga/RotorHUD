@@ -198,6 +198,7 @@ local CONFIG = {
   -- ExpressLRS Lua tool - the first ELRS path that exists is used.
   tools = {
     rf2Dir = "/SCRIPTS/RF2/",
+    rf2Skin = true, -- RF2 drawn in this widget's theme with touch (false = RF2's plain lcd look)
     elrs   = { "/SCRIPTS/TOOLS/elrs.lua", "/SCRIPTS/TOOLS/elrsV3.lua",
                "/SCRIPTS/TOOLS/ExpressLRS.lua", "/SCRIPTS/TOOLS/ELRS.lua" },
   },
@@ -3162,6 +3163,445 @@ end
 -- crossfireTelemetryPop gets every reply. Arming, or leaving full-screen
 -- (no keys would reach the tool any more), closes it at once.
 
+-- ---------------------------- RF2 GUI skin -------------------------------
+-- RF2's lcd UI (ui_lcd.lua) keeps all the logic - MSP reads/writes, Save
+-- (EEPROM write), Reload, Reboot, Acc Cal - and draws through six small
+-- modules: LCD/shared, waitMessage, messageBox, popupMenu, mainMenu, page.
+-- rf2SkinInstall swaps those six for the versions below, which draw in
+-- this widget's theme with touch targets (adapted from rotorflight-lua-
+-- scripts, GPL-3.0). Touch is turned into what ui_lcd already understands:
+-- each frame the modules register tap targets in RF2UI.hits; a tap runs
+-- the target's fn and/or hands ui_lcd its key event (ENTER, EXIT, ...).
+-- The page layout (x/y of every label and field) is RF2's own 800x480
+-- template, moved below the title bar.
+
+local RF2_TOP = 60          -- content starts below the 56px title bar
+local RF2_ROW = 30          -- RF2's 800x480 line spacing
+local RF2_EDIT_Y = 400      -- edit bar while a value is being changed
+local RF2UI = { hits = {} }
+
+local function rf2Hit(x, y, w, h, fn, ev)
+  local hits = RF2UI.hits
+  hits[#hits + 1] = { x, y, w, h, fn, ev }
+end
+
+-- MIDSIZE when every text fits the width, else the default font for all
+-- (one size per group, so tiles/buttons don't mix sizes).
+local function rf2Font(w, texts)
+  for i = 1, #texts do
+    if textWidth(texts[i], MIDSIZE) > w then return 0 end
+  end
+  return MIDSIZE
+end
+
+local function rf2Button(x, y, w, h, label, bg, fn, ev, active, font)
+  drawChamferedRect(x, y, w, h, active and COLOR.accentPanel or COLOR.barBg, bg, 5)
+  lcd.drawText(x + w / 2, y + h / 2, label, CENTER + VCENTER + (font or 0) + COLOR.white)
+  rf2Hit(x, y, w, h, fn, ev)
+end
+
+-- Background + title bar: Back (EXIT), title, page arrows, Menu (the
+-- Save / Reload / Reboot / Acc Cal popup that ENTER-long opens).
+local function rf2Frame(title, kind, keepBg)
+  if not keepBg then lcd.drawFilledRectangle(0, 0, LCD_W, LCD_H, COLOR.bg) end
+  lcd.drawFilledRectangle(0, 0, LCD_W, RF2_TOP - 4, COLOR.panel)
+  lcd.drawFilledRectangle(0, RF2_TOP - 5, LCD_W, 1, COLOR.accentBorder)
+  local quit = (kind == "init") and function() RF2UI.quit = true end or nil
+  rf2Button(8, 6, 104, 44, "< Back", COLOR.panel, quit, EVT_VIRTUAL_EXIT)
+  local right = LCD_W - 8
+  if kind ~= "init" and EVT_VIRTUAL_ENTER_LONG then
+    right = right - 104
+    rf2Button(right, 6, 104, 44, "Menu", COLOR.panel, nil, EVT_VIRTUAL_ENTER_LONG)
+  end
+  if kind == "page" and EVT_VIRTUAL_PREV_PAGE and EVT_VIRTUAL_NEXT_PAGE then
+    right = right - 8 - 60
+    rf2Button(right, 6, 60, 44, ">", COLOR.panel, nil, EVT_VIRTUAL_NEXT_PAGE)
+    right = right - 8 - 60
+    rf2Button(right, 6, 60, 44, "<", COLOR.panel, nil, EVT_VIRTUAL_PREV_PAGE)
+  end
+  local tw = right - 8 - 124
+  lcd.drawText(124, RF2_TOP / 2 - 2, title or "",
+    LEFT + VCENTER + fitFontMeasured(tw, 44, title or "", MIDSIZE) + COLOR.white)
+end
+
+local function rf2Card(w, h, title)
+  local x, y = math.floor((LCD_W - w) / 2), math.floor((LCD_H - h) / 2)
+  drawChamferedRect(x, y, w, h, COLOR.accent, COLOR.bg, 8)
+  drawChamferedRect(x + 2, y + 2, w - 4, h - 4, COLOR.panel, COLOR.accent, 7)
+  if title then lcd.drawText(x + 20, y + 28, title, LEFT + VCENTER + MIDSIZE + COLOR.white) end
+  return x, y
+end
+
+local function rf2Multiline(x, y, text, flags)
+  for line in string.gmatch(text or "", "([^\n]+)") do
+    lcd.drawText(x, y, line, flags)
+    y = y + RF2_ROW
+  end
+end
+
+local function rf2SkinShared()
+  return {
+    backgroundFill = COLOR.bg,
+    getLineSpacing = function() return RF2_ROW end,
+    drawTextMultiline = function(x, y, text) rf2Multiline(x + 16, y, text, COLOR.white) end,
+    clipValue = function(v, lo, hi) return math.max(lo, math.min(hi, v)) end,
+    forceReload = false,
+    textOptions = COLOR.white,
+    foregroundColor = COLOR.muted,
+    killEnterBreak = false,
+    -- only ui_lcd's init screen ("Waiting for connection") calls this
+    drawScreenTitle = function(title) rf2Frame(title, "init") end,
+    pageStatus = { display = 1, editing = 2, saving = 3, eepromWrite = 4, rebooting = 5 },
+  }
+end
+
+local function rf2SkinWait(shared)
+  local t = { text = nil }
+  t.update = function()
+    if not t.text then return end
+    rf2Hit(0, 0, LCD_W, LCD_H) -- modal: swallow taps while saving
+    local x, y = rf2Card(420, 110)
+    lcd.drawText(x + 210, y + 55, t.text, CENTER + VCENTER + DBLSIZE + COLOR.white)
+  end
+  return t
+end
+
+local function rf2SkinMessage(shared)
+  local msg
+  local function close() msg = nil; shared.forceReload = true end
+  local function update(event)
+    if not msg then return false end
+    rf2Frame(msg.title, "msg")
+    local x, y = rf2Card(560, 300, msg.title)
+    rf2Multiline(x + 24, y + 70, msg.text, COLOR.white)
+    rf2Hit(0, 0, LCD_W, LCD_H)
+    rf2Button(x + 200, y + 230, 160, 52, "OK", COLOR.panel, close, nil, true, MIDSIZE)
+    if event == EVT_VIRTUAL_EXIT or event == EVT_VIRTUAL_ENTER then close() end
+    return true
+  end
+  return { show = function(title, text) msg = { title = title, text = text } end, update = update }
+end
+
+local function rf2SkinPopup(shared)
+  local t, active = {}, 1
+  t.show = function(menu) t.menu, active = menu, 1 end
+  t.update = function(event)
+    if not t.menu then return false end
+    if RF2UI.backdrop then RF2UI.backdrop() end
+    local items = t.menu.items
+    local rowH = 60
+    local x, y = rf2Card(420, 56 + #items * (rowH + 8) + 12, "Menu")
+    rf2Hit(0, 0, LCD_W, LCD_H, function() t.menu = nil end) -- tap outside closes
+    for i = 1, #items do
+      local item = items[i]
+      rf2Button(x + 14, y + 56 + (i - 1) * (rowH + 8), 392, rowH, item.text, COLOR.panel,
+        function() t.menu = nil; item.click() end, nil, i == active, MIDSIZE)
+    end
+    if event == EVT_VIRTUAL_EXIT then
+      t.menu = nil
+    elseif event == EVT_VIRTUAL_PREV then
+      active = math.max(1, active - 1)
+    elseif event == EVT_VIRTUAL_NEXT then
+      active = math.min(#items, active + 1)
+    elseif event == EVT_VIRTUAL_ENTER then
+      if shared.killEnterBreak then
+        shared.killEnterBreak = false
+      else
+        local item = items[active]
+        t.menu = nil
+        item.click()
+      end
+    end
+    return true
+  end
+  return t
+end
+
+-- Main menu: the page list as a 3-column grid of tiles.
+local function rf2SkinMainMenu(shared, pageFiles, selected)
+  local t = {}
+  local COLS, TW, TH, GAP = 3, 252, 52, 8
+  local firstRow = 0
+  local rowsShown = math.floor((LCD_H - RF2_TOP - 6 + GAP) / (TH + GAP))
+  local titles = {}
+  for i = 1, #pageFiles do titles[i] = pageFiles[i].title end
+  local font = rf2Font(TW - 28, titles)
+  local function draw()
+    rf2Frame("Rotorflight " .. rf2.luaVersion, "main")
+    local selRow = math.floor((selected - 1) / COLS)
+    if selRow < firstRow then firstRow = selRow end
+    if selRow >= firstRow + rowsShown then firstRow = selRow - rowsShown + 1 end
+    for i = 1, #pageFiles do
+      local row = math.floor((i - 1) / COLS) - firstRow
+      if row >= 0 and row < rowsShown then
+        local x = 10 + ((i - 1) % COLS) * (TW + GAP)
+        local y = RF2_TOP + 4 + row * (TH + GAP)
+        local sel = (i == selected)
+        drawChamferedRect(x, y, TW, TH, sel and COLOR.accentPanel or COLOR.panel, COLOR.bg, 5)
+        if sel then lcd.drawFilledRectangle(x, y + 6, 4, TH - 12, COLOR.accent) end
+        local title = pageFiles[i].title
+        lcd.drawText(x + 16, y + TH / 2, title, LEFT + VCENTER + font + COLOR.white)
+        rf2Hit(x, y, TW, TH, function() selected = i end, EVT_VIRTUAL_ENTER)
+      end
+    end
+    RF2UI.backdrop = draw
+    RF2UI.slide = function(dy)
+      local maxFirst = math.max(0, math.ceil(#pageFiles / COLS) - rowsShown)
+      firstRow = math.max(0, math.min(maxFirst, firstRow - math.floor(dy / (TH + GAP) + 0.5)))
+      selected = math.max(selected, firstRow * COLS + 1)
+      selected = math.min(selected, (firstRow + rowsShown) * COLS, #pageFiles)
+    end
+  end
+  t.update = function(event)
+    draw()
+    if event == EVT_VIRTUAL_NEXT then
+      selected = selected % #pageFiles + 1
+    elseif event == EVT_VIRTUAL_PREV then
+      selected = (selected - 2) % #pageFiles + 1
+    end
+  end
+  t.getSelectedPageIndex = function() return selected end
+  return t
+end
+
+-- One RF2 page: labels and fields at RF2's positions, values in boxes,
+-- tap a field to edit it, then the edit bar (-10 -1 +1 +10 OK) or the
+-- rotary changes it. Editing rules are LCD/page.lua's.
+local function rf2SkinPage(shared, Page)
+  local t = {}
+  local current, scrollY, lastCurrent, lastEditing = 1, 0, nil, false
+  local status = shared.pageStatus
+
+  local function isButton(f) return f.t and string.sub(f.t, 1, 1) == "[" and not f.data end
+
+  local function valueText(f)
+    if isButton(f) then return (string.gsub(f.t, "[%[%]]", "")) end
+    local val = "---"
+    if f.data and f.data.value ~= nil then
+      val = f.data.value
+      if type(val) == "number" then
+        if f.data.scale then val = val / f.data.scale end
+        if (f.data.scale or 1) <= 1 then val = math.floor(val) end
+      end
+      if type(f.data.table) == "table" and f.data.table[val] then val = f.data.table[val] end
+    end
+    return tostring(val) .. ((f.data and f.data.unit) or "")
+  end
+
+  local function incValue(inc)
+    local f = Page.fields[current]
+    if f.data and type(f.data.value) == "number" then
+      local mult = f.data.mult or 1
+      local v = f.data.value + inc * mult
+      v = math.max(f.data.min or 0, math.min(f.data.max or 255, v))
+      f.data.value = math.floor(v / mult + 0.5) * mult
+    end
+    if f.change then f:change(Page) end
+  end
+
+  local function requestPage()
+    if not Page.reqTS or Page.reqTS + 5 <= rf2.clock() then
+      Page.reqTS = rf2.clock()
+      if Page.read then Page:read() end
+    end
+  end
+
+  local function drawEditBar(f)
+    local y, h = RF2_EDIT_Y, LCD_H - RF2_EDIT_Y
+    lcd.drawFilledRectangle(0, y, LCD_W, h, COLOR.panel)
+    lcd.drawFilledRectangle(0, y, LCD_W, 1, COLOR.accentBorder)
+    local by, bh = y + 10, h - 20
+    local isTable = type(f.data and f.data.table) == "table"
+    if not isTable then
+      rf2Button(10, by, 86, bh, "-10", COLOR.panel, function() incValue(-10) end, nil, false, MIDSIZE)
+    end
+    rf2Button(104, by, 86, bh, isTable and "<" or "-1", COLOR.panel, function() incValue(-1) end, nil, false, MIDSIZE)
+    local value = valueText(f)
+    lcd.drawText(345, by + 22, value, CENTER + VCENTER + fitFontMeasured(300, 42, value, DBLSIZE) + COLOR.white)
+    if not isTable and f.data then
+      local sc = f.data.scale or 1
+      local function num(v)
+        v = v / sc
+        return (v == math.floor(v)) and string.format("%d", v) or tostring(v)
+      end
+      local range = num(f.data.min or 0) .. " ... " .. num(f.data.max or 255)
+      lcd.drawText(345, by + bh - 9, range, CENTER + VCENTER + SMLSIZE + COLOR.muted)
+    end
+    rf2Button(500, by, 86, bh, isTable and ">" or "+1", COLOR.panel, function() incValue(1) end, nil, false, MIDSIZE)
+    if not isTable then
+      rf2Button(594, by, 86, bh, "+10", COLOR.panel, function() incValue(10) end, nil, false, MIDSIZE)
+    end
+    rf2Button(LCD_W - 110, by, 100, bh, "OK", COLOR.panel, nil, EVT_VIRTUAL_ENTER, true, MIDSIZE)
+  end
+
+  t.draw = function(pageState)
+    local editing = (pageState == status.editing)
+    lcd.drawFilledRectangle(0, 0, LCD_W, LCD_H, COLOR.bg)
+    local fields, labels = Page.fields or {}, Page.labels or {}
+    if #fields > 0 then
+      if current > #fields then current = #fields end
+      if not Page.skinDy then -- shift RF2's layout so it starts under the title bar
+        local minY, maxY = math.huge, 0
+        for i = 1, #labels do
+          if labels[i].t ~= "" then minY = math.min(minY, labels[i].y); maxY = math.max(maxY, labels[i].y) end
+        end
+        for i = 1, #fields do minY = math.min(minY, fields[i].y); maxY = math.max(maxY, fields[i].y) end
+        Page.skinDy = RF2_TOP + 8 - minY
+        Page.skinBottom = maxY + Page.skinDy + RF2_ROW
+        -- box width limit: up to the next field on the same row (tables)
+        Page.skinW = {}
+        for i = 1, #fields do
+          local fx, fy = fields[i].sp or fields[i].x, fields[i].y
+          local limit = LCD_W - 20 - fx
+          for j = 1, #fields do
+            local gx = fields[j].sp or fields[j].x
+            if j ~= i and math.abs(fields[j].y - fy) < 5 and gx > fx then limit = math.min(limit, gx - fx - 3) end
+          end
+          Page.skinW[i] = limit
+        end
+      end
+      local dy = Page.skinDy
+      local bottom = editing and (RF2_EDIT_Y - 4) or (LCD_H - 4)
+      if current ~= lastCurrent or editing ~= lastEditing then -- keep the selected field in view
+        local fy = fields[current].y + dy
+        if fy - scrollY < RF2_TOP + 4 then scrollY = fy - RF2_TOP - 4 end
+        if fy + RF2_ROW - scrollY > bottom then scrollY = fy + RF2_ROW - bottom end
+        lastCurrent, lastEditing = current, editing
+      end
+      scrollY = math.max(0, math.min(scrollY, math.max(0, Page.skinBottom - bottom)))
+      local off = dy - scrollY
+      if editing then rf2Hit(0, RF2_TOP, LCD_W, LCD_H - RF2_TOP, nil, EVT_VIRTUAL_ENTER) end
+
+      for i = 1, #labels do
+        local l = labels[i]
+        local y = l.y + off
+        if y >= RF2_TOP and y + RF2_ROW <= bottom then
+          lcd.drawText(l.x + 10, y + 14, l.t, LEFT + VCENTER + ((l.bold == false) and COLOR.muted or COLOR.accent))
+        end
+      end
+      for i = 1, #fields do
+        local f = fields[i]
+        local y = f.y + off
+        if y >= RF2_TOP and y + RF2_ROW <= bottom then
+          local sel = (i == current)
+          local vx = (f.sp or f.x) + 10
+          local value = valueText(f)
+          local bw = math.min(math.max(textWidth(value, 0) + 18, 56), Page.skinW[i] or 200)
+          if f.t and not isButton(f) then
+            lcd.drawText(f.x + 10, y + 14, f.t, LEFT + VCENTER + COLOR.white)
+          end
+          if isButton(f) then
+            drawChamferedRect(vx, y, bw + 10, RF2_ROW - 2, sel and COLOR.accentPanel or COLOR.barBg, COLOR.bg, 4)
+            lcd.drawText(vx + (bw + 10) / 2, y + 14, value, CENTER + VCENTER + COLOR.white)
+          elseif f.readOnly then
+            lcd.drawText(vx, y + 14, value, LEFT + VCENTER + COLOR.muted)
+          else
+            local fill = COLOR.barBg
+            if sel then fill = editing and COLOR.accent or COLOR.accentPanel end
+            lcd.drawFilledRectangle(vx, y, bw, RF2_ROW - 2, fill)
+            if sel and not editing then lcd.drawFilledRectangle(vx, y, 3, RF2_ROW - 2, COLOR.accent) end
+            local tf = (textWidth(value, 0) + 4 > bw) and SMLSIZE or 0
+            lcd.drawText(vx + bw / 2 + 1, y + 14, value,
+              CENTER + VCENTER + tf + ((sel and editing) and COLOR.bg or COLOR.white))
+          end
+          if not editing then
+            local hx = math.min(f.x + 10, vx)
+            local editable = Page.isReady and not f.readOnly
+            rf2Hit(hx, y - 1, vx + bw - hx, RF2_ROW,
+              function() current = i end, editable and EVT_VIRTUAL_ENTER or nil)
+          end
+        end
+      end
+      if editing then drawEditBar(fields[current]) end
+    end
+    if Page.init then -- confirm page (Acc Cal): ENTER starts it
+      rf2Button(LCD_W / 2 - 110, LCD_H - 72, 220, 56, "Calibrate", COLOR.bg, nil, EVT_VIRTUAL_ENTER, true, MIDSIZE)
+    end
+    rf2Frame(Page.title, "page", true) -- last, over anything scrolled under it
+    RF2UI.backdrop = function() t.draw(pageState) end
+    RF2UI.slide = function(d) scrollY = scrollY - d end
+  end
+
+  t.update = function(pageState, event)
+    t.draw(pageState)
+    local fields = Page.fields
+    if pageState == status.display then
+      if event == EVT_VIRTUAL_PREV or event == EVT_VIRTUAL_PREV_REPT then
+        current = math.max(1, current - 1)
+      elseif event == EVT_VIRTUAL_NEXT or event == EVT_VIRTUAL_NEXT_REPT then
+        current = math.min(#fields, current + 1)
+      elseif event == EVT_VIRTUAL_ENTER and fields[current] then
+        local f = fields[current]
+        if Page.isReady and not f.readOnly then
+          if not isButton(f) then pageState = status.editing end
+          if f.preEdit then f:preEdit(Page) end
+        end
+      end
+    elseif pageState == status.editing then
+      if event == EVT_VIRTUAL_EXIT or event == EVT_VIRTUAL_ENTER then
+        if fields[current].postEdit then fields[current]:postEdit(Page) end
+        pageState = status.display
+      elseif event == EVT_VIRTUAL_INC or event == EVT_VIRTUAL_INC_REPT then
+        incValue(1)
+      elseif event == EVT_VIRTUAL_DEC or event == EVT_VIRTUAL_DEC_REPT then
+        incValue(-1)
+      end
+    end
+    if Page.timer and (not Page.lastTimeTimerFired or Page.lastTimeTimerFired + 0.5 < rf2.clock()) then
+      Page.lastTimeTimerFired = rf2.clock()
+      Page:timer()
+    end
+    if not Page.isReady and pageState == status.display then requestPage() end
+    return pageState
+  end
+  return t
+end
+
+local RF2_SKIN = {
+  ["LCD/shared"] = rf2SkinShared,
+  ["LCD/waitMessage"] = rf2SkinWait,
+  ["LCD/messageBox"] = rf2SkinMessage,
+  ["LCD/popupMenu"] = rf2SkinPopup,
+  ["LCD/mainMenu"] = rf2SkinMainMenu,
+  ["LCD/page"] = rf2SkinPage,
+}
+
+local function rf2SkinInstall()
+  local execute = rf2.executeScript
+  rf2.executeScript = function(name, ...)
+    local skin = RF2_SKIN[name]
+    if skin then return skin(...) end
+    return execute(name, ...)
+  end
+  rf2.radio.yMinLimit = RF2_TOP + 8 -- init screen text below the title bar
+  rf2.radio.NoTelem = { LCD_W / 2, LCD_H - 16, "No telemetry", CENTER + VCENTER + SMLSIZE + COLOR.red }
+  RF2UI.hits, RF2UI.backdrop, RF2UI.slide, RF2UI.quit = {}, nil, nil, nil
+end
+
+-- Touch -> RF2: taps hit the targets drawn last frame (topmost first),
+-- a slide scrolls. Keys pass through unchanged.
+local function rf2SkinInput(event, touchState)
+  if event == EVT_TOUCH_SLIDE then
+    if RF2UI.slide and touchState and touchState.slideY then RF2UI.slide(touchState.slideY) end
+    return 0
+  elseif event == EVT_TOUCH_FIRST or event == EVT_TOUCH_BREAK then
+    return 0
+  elseif event ~= EVT_TOUCH_TAP then
+    return event
+  end
+  if not touchState then return 0 end
+  local hits = RF2UI.hits
+  for i = #hits, 1, -1 do
+    local h = hits[i]
+    if touchState.x >= h[1] and touchState.x < h[1] + h[3]
+       and touchState.y >= h[2] and touchState.y < h[2] + h[4] then
+      if h[5] then h[5]() end
+      return h[6] or 0
+    end
+  end
+  return 0
+end
+
 local function startRf2()
   local dir = CONFIG.tools.rf2Dir
   local compiled = loadScript(dir .. "COMPILE/scripts_compiled.lua")
@@ -3170,6 +3610,7 @@ local function startRf2()
   if compiled() then
     assert(loadScript(dir .. "rf2.lua"))()
     rf2.radio = rf2.executeScript("radios")
+    if CONFIG.tools.rf2Skin then rf2SkinInstall() end
     rf2.mspQueue = rf2.executeScript("MSP/mspQueue")
     rf2.mspHelper = rf2.executeScript("MSP/mspHelper")
     rf2.isTool = true
@@ -3307,7 +3748,13 @@ local function refresh(wgt, event, touchState)
       stopTool(wgt)
     else
       if event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then wgt.hosted.exitAt = getTime() end
+      local skinned = wgt.hosted.kind == "rf2" and rf2 and rf2.radio and CONFIG.tools.rf2Skin
+      if skinned then
+        event = rf2SkinInput(event or 0, touchState)
+        RF2UI.hits = {}
+      end
       local ok, ret = pcall(wgt.hosted.run, event or 0, touchState)
+      if skinned and RF2UI.quit then ok, ret = true, 2 end
       if not ok then
         stopTool(wgt, "Tool error: " .. tostring(ret))
       elseif ret and ret ~= 0 then
