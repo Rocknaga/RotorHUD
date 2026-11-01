@@ -4055,14 +4055,40 @@ function LV.tab(k, x, y, w, h, label, valueKey, noteKey, markKey)
   LV.text(k, left, y + TAB_LABEL_H + (h - TAB_LABEL_H) / 2, w - (left - x) - 8, LV.dv(valueKey, "--"), MIDSIZE, COLOR.white)
 end
 
+-- Largest font up to cap whose measured width fits w (cached per text):
+-- an lvgl label wraps instead of overflowing, so long text must shrink.
+LV.fits = {}
+function LV.fitFont(text, w, cap)
+  local key = text .. "|" .. w .. "|" .. cap
+  local f = LV.fits[key]
+  if f then return f end
+  f = SMLSIZE
+  for _, cand in ipairs({ DBLSIZE, MIDSIZE, 0 }) do
+    if cand <= cap and textWidth(text, cand) <= w then f = cand; break end
+  end
+  LV.nFits = (LV.nFits or 0) + 1
+  if LV.nFits > 200 then LV.fits, LV.nFits = {}, 0 end
+  LV.fits[key] = f
+  return f
+end
+
+-- label that shrinks its font to fit w, kept vertically centered on cy
+function LV.fitText(k, x, cy, w, key, default, cap, color, align)
+  local function font() return LV.fitFont(LV.v[key] or default, w, cap) end
+  LV.text(k, x, cy, w, LV.dv(key, default), cap, color, align, {
+    font = font,
+    pos = function() return math.floor(x), math.floor(cy - LV.lh(font()) / 2) end })
+end
+
 -- bar with label and value written inside it (Battery / Throttle)
 function LV.bar(k, x, y, w, h, labelKey, valueKey, pctKey, colorKey, color, font)
   LV.rect(k, x, y, w, h, COLOR.barBg)
   LV.rect(k, x, y, 0, h, color, nil, {
     color = colorKey and LV.dv(colorKey, color) or color,
     size = function() return math.floor(w * math.max(0, math.min(100, LV.v[pctKey] or 0)) / 100), h end })
-  LV.text(k, x + 12, y + h / 2, w / 2, LV.dv(labelKey, ""), font, COLOR.white)
-  LV.text(k, x + w / 2, y + h / 2, w / 2 - 12, LV.dv(valueKey, "--"), font, COLOR.white, RIGHT)
+  local lw = math.floor(w * 0.58) - 12
+  LV.fitText(k, x + 12, y + h / 2, lw, labelKey, "", font, COLOR.white)
+  LV.fitText(k, x + 12 + lw, y + h / 2, w - lw - 24, valueKey, "--", font, COLOR.white, RIGHT)
 end
 
 -- top bar: warnings left, Menu button, date/time, signal bars, TX battery
@@ -4115,8 +4141,8 @@ function LV.buildDashboard(k, wgt, w, h)
   LV.text(k, hx + 8, hy + TAB_LABEL_H / 2 + 1, heroW / 2, "Headspeed", SMLSIZE, COLOR.dim)
   LV.text(k, hx + heroW / 2, hy + TAB_LABEL_H / 2 + 1, heroW / 2 - 8, LV.dv("rpmMax", ""), SMLSIZE, COLOR.muted, RIGHT)
   local cy = hy + TAB_LABEL_H + (hh - TAB_LABEL_H) / 2
-  LV.text(k, hx, cy, heroW - 44, LV.dv("rpm", "--"), XXLSIZE, COLOR.white, RIGHT)
-  LV.text(k, hx + heroW - 40, cy + 18, 40, "rpm", SMLSIZE, COLOR.dim)
+  LV.text(k, hx, cy, heroW, LV.dv("rpm", "--"), XXLSIZE, COLOR.white, CENTER)
+  LV.text(k, hx + heroW - 40, cy + 30, 40, "rpm", SMLSIZE, COLOR.dim)
 
   local midY, midH = clusterY + clusterH + pad, math.floor(h * 0.135)
   local panelW = w - pad * 2
