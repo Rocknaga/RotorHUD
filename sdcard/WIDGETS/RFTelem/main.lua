@@ -364,6 +364,7 @@ local CONFIG = {
       disconnect = { { 1320, 80, 30 }, { 880, 140, 0 } },          -- falling
       caution    = { { 1000, 100, 80 }, { 1000, 100, 0 } },        -- two beeps
       critical   = { { 2000, 70, 40 }, { 2000, 70, 40 }, { 2000, 70, 0 } }, -- three fast, high
+      saved      = { { 1200, 60, 20 }, { 1800, 120, 0 } },         -- FC settings saved
     },
     hapticCaution  = { { 30, 0 } },
     hapticCritical = { { 60, 30 }, { 60, 30 }, { 60, 0 } },
@@ -5269,6 +5270,7 @@ end
 
 function LV.rf2.messageBox()
   return { show = function(title, text)
+    LV.rf2.savePending = nil -- RF2's save warning / error: not "Saved"
     LV.rf2.modal(title, text, { { text = "OK", press = function() if LV.rf2.redraw then LV.rf2.redraw() end end } })
   end }
 end
@@ -5391,6 +5393,13 @@ function LV.rf2.page()
 
   t.show = function(p)
     page = p
+    local sp = LV.rf2.savePending
+    if sp and page.isReady and sp.page ~= page and sp.title == page.title then
+      LV.rf2.savePending, LV.rf2.savedAt = nil, getTime() -- reloaded after the save: it went through
+      playEffect(nil, "saved")
+    elseif sp and getTime() - sp.at > 1000 then
+      LV.rf2.savePending = nil -- no reload within 10 s: say nothing
+    end
     local k = {}
     LV.rect(k, 0, 0, LCD_W, LCD_H, COLOR.bg)
     local actions = {}
@@ -5398,8 +5407,11 @@ function LV.rf2.page()
       actions[#actions + 1] = { text = "Save", w = 120, press = function()
         if saving then return end
         saving = true
+        -- RF2 reloads the page once the FC has written its EEPROM; a
+        -- warning / error comes as a messageBox instead (see show below)
+        LV.rf2.savePending = { page = page, title = page.title, at = getTime() }
         page:write()
-      end, extra = { color = COLOR.accent } }
+      end, extra = { color = COLOR.accent, text = function() return saving and "Saving" or "Save" end } }
     end
     actions[#actions + 1] = { text = "Menu", w = 110, press = function()
       LV.rf2.modal("Menu", nil, {
@@ -5484,6 +5496,10 @@ function LV.rf2.page()
         MIDSIZE, COLOR.dim, CENTER)
     end
     if editing and fields[editing] then editSheet(k, fields[editing]) end
+    -- "Saved" banner for 2.5 s after a save went through
+    local savedVis = function() return LV.rf2.savedAt ~= nil and getTime() - LV.rf2.savedAt < 250 end
+    LV.rect(k, 120, LCD_H / 2 - 50, LCD_W - 240, 100, COLOR.green, 10, { visible = savedVis })
+    LV.text(k, 120, LCD_H / 2, LCD_W - 240, "Saved to the FC", DBLSIZE, COLOR.black, CENTER, { visible = savedVis })
     lvgl.clear()
     lvgl.build(k)
     LV.rf2.redraw = function() t.show(page) end
