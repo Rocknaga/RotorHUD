@@ -138,3 +138,14 @@
 - センサー名が違う → `CONFIG.sensors` の候補リスト先頭に追加
 - 文字がはみ出す → まず `FONT_SPECS` の実測値と `fitFont` の引数を確認 (推定で調整しない)
 - 新しいオプション → 末尾の `options` と `refresh` 内の読み取り (EdgeTX の制約: 数値/色/ソース/真偽)
+
+## lvgl 版 (LVGL VIEW 節、CONFIG.lvgl = true)
+
+- `refresh` は tick の後 `LV.refresh` に渡す。画面種別 (`LV.screenType`、lcd 版と同じ判定) / テーマ / ゾーン / 全画面かどうか /
+  機体画像 / ARMD が変わったときだけ `LV.build` (lvgl.clear + lvgl.build) で組み直し、毎フレームは `LV.update` が `LV.v` を埋める
+- 部品: `LV.rect` `LV.text` (中心 y 指定、実測行高) `LV.button` `LV.tab` (drawTab と同じ配置) `LV.bar` `LV.topBar`
+- 画面: buildDashboard / buildStandby / buildArmWarning / buildBattSelect / buildFlightLog (グラフは line の pts、画面に入った時に 1 回計算) /
+  buildMenu (表示は visible 関数) / buildToolMsg / buildSmall (小ゾーン)
+- ボタンは全画面のときだけ作られる (EdgeTX の仕様)。全画面でない時は Close スイッチ等の従来の操作が有効
+- RF2: `startRf2Lvgl` が公式 `ui_lvgl_runner` を返し、ホスト中は RF2 がウィジェットの lvgl ツリーを使う。2 が返ったら閉じて組み直す。
+  ARM・全画面解除で閉じる。`wgt.fcApi` があれば `ui_init` を差し替えて API 待ちを省く

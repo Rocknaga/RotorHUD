@@ -197,6 +197,9 @@ local CONFIG = {
   -- Rotorflight's own Lua (installed under /SCRIPTS/RF2/, lcd UI) and the
   -- ExpressLRS Lua tool - the first ELRS path that exists is used.
   perfOverlay = true, -- fps / ms per frame / Lua KB, bottom-right (speed check on the radio)
+  -- lvgl widget (EdgeTX 2.11+): only what changes is redrawn - measured
+  -- 12-20 fps vs 4-6 fps for the lcd drawing on the TX16S MK3 (LVGL VIEW)
+  lvgl = true,
   tools = {
     rf2Dir = "/SCRIPTS/RF2/",
     rf2Skin = true, -- RF2 drawn in this widget's theme with touch (false = RF2's plain lcd look)
@@ -686,12 +689,12 @@ local function ensureModelImage(wgt)
     return
   end
   wgt.modelImageName = name
-  wgt.modelBitmap = nil
+  wgt.modelBitmap, wgt.modelImagePath = nil, nil
   for i = 1, #CONFIG.imagePaths do
     local path = string.gsub(CONFIG.imagePaths[i], "{name}", name)
     local bmp = tryLoadBitmap(path)
     if bmp then
-      wgt.modelBitmap = bmp
+      wgt.modelBitmap, wgt.modelImagePath = bmp, path
       break
     end
   end
@@ -699,6 +702,7 @@ local function ensureModelImage(wgt)
   -- filename doesn't match the model name exactly.
   if not wgt.modelBitmap and info and info.bitmap and info.bitmap ~= "" then
     wgt.modelBitmap = tryLoadBitmap("/IMAGES/" .. info.bitmap)
+    if wgt.modelBitmap then wgt.modelImagePath = "/IMAGES/" .. info.bitmap end
   end
 end
 
@@ -3857,6 +3861,32 @@ local function startRf2(apiVersion)
   return assert(loadScript(dir .. "COMPILE/compile.lua"))(), nil, true
 end
 
+-- lvgl widget: RF2's own lvgl UI (ui_lvgl_runner), started as the RfTool
+-- widget does; it builds its screens in this widget's lvgl tree.
+local function startRf2Lvgl(apiVersion)
+  local dir = CONFIG.tools.rf2Dir
+  local compiled = loadScript(dir .. "COMPILE/scripts_compiled.lua")
+  if not compiled then return nil, "Rotorflight Lua not found in " .. dir end
+  if chdir then chdir(dir) end
+  if not compiled() then
+    return assert(loadScript(dir .. "COMPILE/compile.lua"))(), nil, true
+  end
+  assert(loadScript(dir .. "rf2.lua"))()
+  rf2.radio = rf2.executeScript("radios")
+  if apiVersion then -- already read by this widget: skip RF2's request
+    local execute = rf2.executeScript
+    rf2.executeScript = function(name, ...)
+      if name == "ui_init" then
+        return { t = "", f = function() rf2.apiVersion = apiVersion; return true end }
+      end
+      return execute(name, ...)
+    end
+  end
+  rf2.mspQueue = rf2.executeScript("MSP/mspQueue")
+  rf2.mspHelper = rf2.executeScript("MSP/mspHelper")
+  return rf2.executeScript("ui_lvgl_runner")
+end
+
 local function startElrs()
   for _, path in ipairs(CONFIG.tools.elrs) do
     local chunk = loadScript(path)
@@ -3892,6 +3922,8 @@ local MENU_ITEMS = {
 local function menuItemState(wgt, t, connected, key)
   if key == "rf2" then
     return connected, "needs the model connected"
+  elseif key == "elrs" and CONFIG.lvgl and lvgl then
+    return false, "lcd tool - use SYS > Tools"
   elseif key == "elrs" then
     return crossfireTelemetryPush ~= nil and crossfireTelemetryPush() ~= nil, "no CRSF module"
   end
@@ -3906,7 +3938,7 @@ local function openMenuItem(wgt, t, connected, key)
     wgt.bp = { phase = "pick", sel = t.battProfile, since = getTime() }
     return
   end
-  local okStart, run, err, compiling = pcall(key == "rf2" and startRf2 or startElrs, wgt.fcApi)
+  local okStart, run, err, compiling = pcall(key == "rf2" and ((CONFIG.lvgl and lvgl) and startRf2Lvgl or startRf2) or startElrs, wgt.fcApi)
   if not okStart then
     stopTool(wgt, "Could not start: " .. tostring(run))
   elseif not run then
@@ -3947,6 +3979,664 @@ local function drawToolMsg(wgt, w, h)
   if getTime() - m.at > 300 then wgt.toolMsg = nil; return end
   drawChamferedRect(40, h - 64, w - 80, 44, COLOR.red, COLOR.bg, 6)
   lcd.drawText(w / 2, h - 42, m.text, CENTER + VCENTER + fitFontMeasured(w - 100, 27, m.text, SMLSIZE) + COLOR.white)
+end
+
+-- ============================== LVGL VIEW =================================
+-- CONFIG.lvgl: the widget is an lvgl widget (EdgeTX 2.11+). Measured on the
+-- TX16S MK3 (tools/diagtest DrawBench / LvglBench, 2026-11-01): an lcd
+-- widget is redrawn completely every frame and ran at 4-6 fps (EdgeTX alone
+-- costs ~75-110 ms per frame, each text ~1 ms); an lvgl widget keeps its
+-- objects and redraws what changed: 12-20 fps for a dashboard-sized scene.
+-- Each screen is built once (LV.build*) when it changes; labels, colors,
+-- sizes and visibility are functions reading LV.v, which LV.update* fills
+-- once per frame from the same trackers the lcd screens use. Taps go to
+-- lvgl buttons directly (also outside full screen in App mode). The lcd
+-- drawing above stays for CONFIG.lvgl = false.
+local LV = { v = {} }
+local LV_LH = { [0] = 27 } -- measured line heights (FONT_SPECS)
+
+function LV.lh(font)
+  if not LV_LH[SMLSIZE] then
+    LV_LH[SMLSIZE], LV_LH[MIDSIZE], LV_LH[DBLSIZE], LV_LH[XXLSIZE] = 23, 42, 55, 93
+  end
+  return LV_LH[font or 0] or 27
+end
+
+-- dynamic value: a function reading LV.v[key]
+function LV.dv(key, default)
+  return function()
+    local x = LV.v[key]
+    if x == nil then return default end
+    return x
+  end
+end
+
+function LV.rect(k, x, y, w, h, color, radius, extra)
+  local r = { type = "rectangle", x = math.floor(x), y = math.floor(y), w = math.floor(w), h = math.floor(h),
+    color = color, filled = true, rounded = radius }
+  if extra then for key, val in pairs(extra) do r[key] = val end end
+  k[#k + 1] = r
+  return r
+end
+
+-- text vertically centered on cy; align LEFT (x = left edge) / RIGHT /
+-- CENTER (x..x+w is the box)
+function LV.text(k, x, cy, w, text, font, color, align, extra)
+  font = font or 0
+  local lh = LV.lh(font)
+  local r = { type = "label", x = math.floor(x), y = math.floor(cy - lh / 2), w = math.floor(w), h = lh,
+    text = text, font = font, color = color, align = align or LEFT }
+  if extra then for key, val in pairs(extra) do r[key] = val end end
+  k[#k + 1] = r
+  return r
+end
+
+function LV.button(k, x, y, w, h, text, press, font, extra)
+  local r = { type = "button", x = math.floor(x), y = math.floor(y), w = math.floor(w), h = math.floor(h),
+    text = text, press = press, font = font or 0, color = COLOR.barBg, textColor = COLOR.white, cornerRadius = 6 }
+  if extra then for key, val in pairs(extra) do r[key] = val end end
+  k[#k + 1] = r
+  return r
+end
+
+-- drawTab's layout: 18px label row (label left, note right), value below
+-- at MIDSIZE; markKey = color stripe on the left edge.
+function LV.tab(k, x, y, w, h, label, valueKey, noteKey, markKey)
+  local left = x + 8
+  if markKey then
+    LV.rect(k, x + 2, y + 4, 4, h - 8, COLOR.grey, nil, { color = LV.dv(markKey, COLOR.grey) })
+    left = x + 14
+  end
+  local ly = y + TAB_LABEL_H / 2 + 1
+  LV.text(k, left, ly, w - (left - x) - 8, label, SMLSIZE, COLOR.dim)
+  if noteKey then
+    LV.text(k, x + w / 2, ly, w / 2 - 8, LV.dv(noteKey, ""), SMLSIZE, COLOR.muted, RIGHT)
+  end
+  LV.text(k, left, y + TAB_LABEL_H + (h - TAB_LABEL_H) / 2, w - (left - x) - 8, LV.dv(valueKey, "--"), MIDSIZE, COLOR.white)
+end
+
+-- bar with label and value written inside it (Battery / Throttle)
+function LV.bar(k, x, y, w, h, labelKey, valueKey, pctKey, colorKey, color, font)
+  LV.rect(k, x, y, w, h, COLOR.barBg)
+  LV.rect(k, x, y, 0, h, color, nil, {
+    color = colorKey and LV.dv(colorKey, color) or color,
+    size = function() return math.floor(w * math.max(0, math.min(100, LV.v[pctKey] or 0)) / 100), h end })
+  LV.text(k, x + 12, y + h / 2, w / 2, LV.dv(labelKey, ""), font, COLOR.white)
+  LV.text(k, x + w / 2, y + h / 2, w / 2 - 12, LV.dv(valueKey, "--"), font, COLOR.white, RIGHT)
+end
+
+-- top bar: warnings left, Menu button, date/time, signal bars, TX battery
+function LV.topBar(k, wgt, w, withMenu)
+  local pad, y, h = 12, 12, 30
+  LV.rect(k, pad, y, w - pad * 2, h, COLOR.chip, 6)
+  LV.rect(k, pad + 12, y + h / 2 - 4, 8, 8, COLOR.red, nil, { visible = function() return LV.v.warn ~= "" end })
+  LV.text(k, pad + 26, y + h / 2, 360, LV.dv("warn", ""), SMLSIZE, COLOR.red)
+  local bx = w - pad - 12 - 44
+  LV.rect(k, bx, y + 6, 40, h - 12, COLOR.dim, 3, { filled = false, thickness = 2 })
+  LV.rect(k, bx + 40, y + 11, 4, h - 22, COLOR.dim)
+  LV.rect(k, bx + 3, y + 9, 34, h - 18, COLOR.green, 1, {
+    color = LV.dv("txColor", COLOR.green),
+    size = function() return math.max(1, math.floor(34 * (LV.v.txPct or 0) / 100)), h - 18 end })
+  local sx = bx - 12 - 22
+  for i = 1, 4 do
+    local bh = 4 + i * 4
+    LV.rect(k, sx + (i - 1) * 6, y + h - 6 - bh, 4, bh, COLOR.barBg, nil, {
+      color = function() return ((LV.v.sig or 0) >= i * 25 - 12) and COLOR.green or COLOR.barBg end })
+  end
+  LV.text(k, sx - 12 - 170, y + h / 2, 170, LV.dv("clock", ""), SMLSIZE, COLOR.white, RIGHT)
+  if withMenu then
+    LV.button(k, sx - 12 - 170 - 12 - 90, y + 2, 90, h - 4, "Menu",
+      function() if not LV.v.armed then wgt.menu = { sel = 1 } end end, SMLSIZE,
+      { visible = function() return not LV.v.armed end })
+  end
+end
+
+function LV.buildDashboard(k, wgt, w, h)
+  local pad = 12
+  LV.topBar(k, wgt, w, true)
+  local clusterY, clusterH = 12 + 30 + pad, math.floor(h * 0.32)
+  LV.rect(k, pad, clusterY, w - pad * 2, clusterH, COLOR.accentBorder, 8)
+  LV.rect(k, pad + 1, clusterY + 1, w - pad * 2 - 2, clusterH - 2, COLOR.accentPanel, 7)
+  local innerPad = 10
+  local innerW = w - pad * 2 - innerPad * 2
+  local flankW = math.floor(innerW * 0.3)
+  local heroW = innerW - flankW * 2 - innerPad * 2
+  local cellH = math.floor((clusterH - innerPad * 3) / 2)
+  local lx = pad + innerPad
+  local y1, y2 = clusterY + innerPad, clusterY + innerPad * 2 + cellH
+  local rx = lx + flankW + innerPad + heroW + innerPad
+  for _, f in ipairs({ { lx, y1, "Volt", "volt", "voltMin" }, { lx, y2, "Vcel", "vcel" },
+                       { rx, y1, "Current", "curr", "currMax" }, { rx, y2, "Bec volt", "bec", "becMin" } }) do
+    LV.rect(k, f[1], f[2], flankW, cellH, COLOR.panel, 4)
+    LV.tab(k, f[1], f[2], flankW, cellH, f[3], f[4], f[5])
+  end
+  local hx = lx + flankW + innerPad
+  local hy, hh = clusterY + innerPad, clusterH - innerPad * 2
+  LV.text(k, hx + 8, hy + TAB_LABEL_H / 2 + 1, heroW / 2, "Headspeed", SMLSIZE, COLOR.dim)
+  LV.text(k, hx + heroW / 2, hy + TAB_LABEL_H / 2 + 1, heroW / 2 - 8, LV.dv("rpmMax", ""), SMLSIZE, COLOR.muted, RIGHT)
+  local cy = hy + TAB_LABEL_H + (hh - TAB_LABEL_H) / 2
+  LV.text(k, hx, cy, heroW - 44, LV.dv("rpm", "--"), XXLSIZE, COLOR.white, RIGHT)
+  LV.text(k, hx + heroW - 40, cy + 18, 40, "rpm", SMLSIZE, COLOR.dim)
+
+  local midY, midH = clusterY + clusterH + pad, math.floor(h * 0.135)
+  local panelW = w - pad * 2
+  LV.rect(k, pad, midY, panelW, midH, COLOR.panel, 6)
+  local segW = math.floor(panelW / 4)
+  local tabs = { { "Arm", "arm", "armColor" }, { LV.dv("govLabel", "Governor"), "gov", "govColor" },
+                 { "Flight", "flight" }, { "Profile/Rate", "profile" } }
+  for i = 1, 4 do
+    local tb = tabs[i]
+    local sx = pad + (i - 1) * segW
+    local sw = (i == 4) and (panelW - segW * 3) or segW
+    if i > 2 then LV.rect(k, sx, midY + 10, 1, midH - 20, COLOR.muted) end
+    LV.tab(k, sx + 4, midY + 2, sw - 8, midH - 4, tb[1], tb[2], nil, tb[3])
+  end
+
+  local r3y, r3h = midY + midH + pad, math.floor(h * 0.18)
+  LV.rect(k, pad, r3y, w - pad * 2, r3h, COLOR.panel, 8)
+  LV.bar(k, pad + 12, r3y + 10, w - pad * 2 - 24, r3h - 18, "battLabel", "battValue", "charge", "battColor",
+    COLOR.battGood, DBLSIZE)
+
+  local r4y, r4h = r3y + r3h + pad, math.floor(h * 0.15)
+  local sideW = math.floor((w - pad * 3) * 0.26)
+  local thrW = (w - pad * 3) - sideW
+  LV.rect(k, pad, r4y, thrW, r4h, COLOR.panel, 7)
+  LV.bar(k, pad + 10, r4y + 8, thrW - 20, r4h - 14, "thrLabel", "thrValue", "thr", nil, COLOR.accent, MIDSIZE)
+  local sideX = pad + thrW + pad
+  LV.rect(k, sideX, r4y, sideW, r4h, COLOR.panel, 7)
+  if CONFIG.showModelImage and wgt.modelImagePath then
+    k[#k + 1] = { type = "image", file = wgt.modelImagePath, x = sideX + math.floor((sideW - CONFIG.modelImageW) / 2),
+      y = r4y + math.floor((r4h - 20 - CONFIG.modelImageH) / 2), w = CONFIG.modelImageW, h = CONFIG.modelImageH }
+  end
+  LV.text(k, sideX + 8, r4y + r4h - 10, sideW - 16, LV.dv("model", ""), SMLSIZE, COLOR.dim, CENTER)
+end
+
+function LV.buildStandby(k, wgt, w, h)
+  local pad, y = 12, 12
+  local panelW = w - pad * 2
+  local heroH = (h - pad) - y - (pad + 56 + pad + 62)
+  LV.rect(k, pad, y, panelW, heroH, COLOR.accentBorder, 8)
+  LV.rect(k, pad + 1, y + 1, panelW - 2, heroH - 2, COLOR.accentPanel, 7)
+  local half = math.floor(panelW / 2)
+  LV.text(k, pad, y + heroH / 2 - 10, half, LV.dv("hhmm", ""), XXLSIZE, COLOR.white, CENTER)
+  LV.text(k, pad, y + heroH - 34, half, LV.dv("date", ""), SMLSIZE, COLOR.dim, CENTER)
+  LV.rect(k, pad + half, y + 24, 1, heroH - 48, COLOR.muted)
+  local imgY = y + math.floor(heroH * 0.22)
+  if CONFIG.showModelImage and wgt.modelImagePath then
+    k[#k + 1] = { type = "image", file = wgt.modelImagePath, x = pad + half + math.floor((half - CONFIG.modelImageW) / 2),
+      y = imgY, w = CONFIG.modelImageW, h = CONFIG.modelImageH }
+  end
+  LV.text(k, pad + half + 20, imgY + CONFIG.modelImageH + 48, half - 40, LV.dv("model", ""), DBLSIZE, COLOR.white, CENTER)
+  LV.text(k, pad + half, y + heroH - 34, half, "Model", SMLSIZE, COLOR.dim, CENTER)
+
+  local sy, sh = y + heroH + pad, 56
+  LV.rect(k, pad, sy, panelW, sh, COLOR.panel, 6)
+  LV.text(k, pad + 16, sy + 22, panelW / 2, LV.dv("waiting", ""), MIDSIZE, COLOR.white)
+  LV.text(k, pad + panelW / 2, sy + 22, panelW / 2 - 16, LV.dv("standbyHint", ""), SMLSIZE, COLOR.dim, RIGHT)
+  local trackX, trackW, trackY = pad + 16, panelW - 32, sy + sh - 9
+  LV.rect(k, trackX, trackY, trackW, 3, COLOR.barBg)
+  LV.rect(k, trackX, trackY, 120, 3, COLOR.accent, nil, {
+    pos = function() return trackX + math.floor((trackW - 120) * ((getTime() % 200) / 200)), trackY end })
+
+  local ty, tabH = sy + sh + pad, 62
+  LV.rect(k, pad, ty, panelW, tabH, COLOR.panel, 6)
+  local fracs = { 0.26, 0.30, 0.22 }
+  local tabs = { { "TX battery", "txV", "txPctText", "txColor" }, { "Last flight", "lastFlight", "lastUsed" },
+                 { "Voice", "voice" }, { "Alarms", "alarms", nil, "alarmsColor" } }
+  local tx = pad
+  for i = 1, 4 do
+    local tb = tabs[i]
+    local tw = fracs[i] and math.floor(panelW * fracs[i]) or (pad + panelW - tx)
+    if i == 2 or i == 3 then LV.rect(k, tx, ty + 10, 1, tabH - 20, COLOR.muted) end
+    LV.tab(k, tx + 2, ty + 1, tw - 4, tabH - 2, tb[1], tb[2], tb[3], tb[4])
+    tx = tx + tw
+  end
+end
+
+function LV.buildArmWarning(k, wgt, w, h, armd)
+  LV.topBar(k, wgt, w, false)
+  local y = 12 + 30 + 12
+  local areaH = h - y
+  LV.rect(k, 2, y + 2, w - 4, areaH - 4, COLOR.red, 0, { filled = false, thickness = 6 })
+  local cy = y + areaH * 0.38
+  LV.rect(k, w / 2 - 5, cy - 46, 10, 30, COLOR.red)
+  LV.rect(k, w / 2 - 5, cy - 10, 10, 10, COLOR.red)
+  if armd == ARMD_ARM_SWITCH_AT_POWERUP then
+    LV.text(k, 20, cy + 26, w - 40, "ARM SWITCH WAS ON AT POWER-UP", DBLSIZE, COLOR.red, CENTER)
+    LV.text(k, 20, cy + 64, w - 40, "Cycle the switch off and on to arm - cannot fly like this", SMLSIZE, COLOR.white, CENTER)
+  else
+    LV.text(k, 20, cy + 26, w - 40, "ARMING DISABLED", DBLSIZE, COLOR.red, CENTER)
+    local reasons, names = decodeArmd(armd), {}
+    for i = 1, #reasons do names[i] = reasons[i][2] end
+    local reasonText = (#names > 0) and table.concat(names, " / ") or "unknown"
+    LV.text(k, 30, cy + 78, w - 60, reasonText, fitFontMeasured(w - 60, 42, reasonText, MIDSIZE), COLOR.white, CENTER)
+    LV.text(k, 20, cy + 114, w - 40, "code " .. fmt(armd, 0), SMLSIZE, COLOR.dim, CENTER)
+  end
+end
+
+function LV.buildBattSelect(k, wgt, w, h)
+  LV.topBar(k, wgt, w, false)
+  local pad, y = 12, 12 + 30 + 12
+  local panelW, cfg = w - pad * 2, CONFIG.batteryProfile
+  local titleH = 40
+  LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
+  LV.text(k, pad + 14, y + titleH / 2, 300, "Battery profile", MIDSIZE, COLOR.white)
+  LV.text(k, pad + panelW / 2, y + titleH / 2, panelW / 2 - 14, LV.dv("bpStatus", ""), SMLSIZE, COLOR.dim, RIGHT,
+    { color = LV.dv("bpStatusColor", COLOR.dim) })
+  local hintH, gap = 40, 10
+  local gridY = y + titleH + pad
+  local gridH = h - pad - hintH - pad - gridY
+  local tileW = math.floor((panelW - gap * 2) / 3)
+  local tileH = math.floor((gridH - gap) / 2)
+  for i = 1, 6 do
+    local col, row = (i - 1) % 3, math.floor((i - 1) / 3)
+    local tx, ty = pad + col * (tileW + gap), gridY + row * (tileH + gap)
+    LV.rect(k, tx, ty, tileW, tileH, COLOR.accent, 6, {
+      visible = function() return wgt.bp ~= nil and wgt.bp.sel == i end })
+    local label = cfg.labels[i] or ("Profile " .. i)
+    local cap = wgt.battCaps and wgt.battCaps[i]
+    if cap and cap > 0 then
+      label = (label ~= "Profile " .. i) and (label .. "  " .. cap .. "mAh") or (cap .. "mAh")
+    end
+    LV.rect(k, tx + 3, ty + 3, tileW - 6, tileH - 6, COLOR.panel, 5) -- the button below is full screen only
+    LV.button(k, tx + 3, ty + 3, tileW - 6, tileH - 6, "", function()
+      if wgt.bp and wgt.bp.phase == "pick" and wgt.lastT then bpChoose(wgt, wgt.lastT, i) end
+    end, 0, { color = COLOR.panel })
+    LV.text(k, tx + 18, ty + tileH / 2 - 12, 60, tostring(i), DBLSIZE, COLOR.white)
+    LV.text(k, tx + 18, ty + tileH - 22, tileW - 30, label, fitFontMeasured(tileW - 30, 27, label, SMLSIZE), COLOR.dim)
+    LV.text(k, tx + tileW / 2, ty + 16, tileW / 2 - 12, "current", SMLSIZE, COLOR.green, RIGHT, {
+      visible = function() return LV.v.battProfile == i end })
+  end
+  local hy = h - pad - hintH
+  LV.rect(k, pad, hy, panelW, hintH, COLOR.panel, 6)
+  LV.text(k, pad + 14, hy + hintH / 2, panelW - 28, LV.dv("bpHint", ""), SMLSIZE, COLOR.dim)
+end
+
+function LV.buildFlightLog(k, wgt, w, h)
+  LV.topBar(k, wgt, w, false)
+  local pad, y = 12, 12 + 30 + 12
+  local panelW = w - pad * 2
+  local s = wgt.samples
+  local titleH = 40
+  LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
+  LV.text(k, pad + 14, y + titleH / 2, 200, "Flight log", MIDSIZE, COLOR.white)
+  LV.text(k, pad + 14 + 170, y + titleH / 2, 300, LV.v.model or "", SMLSIZE, COLOR.dim)
+  -- outside full screen there are no buttons: the countdown shows as text
+  LV.rect(k, pad + panelW - 8 - 150, y + 5, 150, titleH - 10, COLOR.barBg, 6)
+  LV.text(k, pad + panelW - 8 - 150, y + titleH / 2, 150, LV.dv("closeText", "Close"), SMLSIZE, COLOR.white, CENTER)
+  LV.button(k, pad + panelW - 8 - 150, y + 5, 150, titleH - 10, "", function()
+    wgt.showFlightLog = false
+  end, SMLSIZE, { text = LV.dv("closeText", "Close") })
+
+  local stats = flightSampleStats(wgt)
+  local power = "--"
+  if wgt.maxPower then
+    power = (wgt.maxPower >= 1000) and (fmt(wgt.maxPower / 1000, 1) .. "kW") or (fmt(wgt.maxPower, 0) .. "W")
+  end
+  local rows = {
+    { { "Flight time", fmtTime(wgt.flightSeconds) },
+      { "Max rpm", wgt.maxHeadspeed and fmt(wgt.maxHeadspeed, 0) or "--", stats.avgRpm and ("avg " .. fmt(stats.avgRpm, 0)) },
+      { "Max amps", wgt.maxCurrent and (fmt(wgt.maxCurrent, 1) .. "A") or "--", stats.avgCur and ("avg " .. fmt(stats.avgCur, 0) .. "A") },
+      { "Max power", power } },
+    { { "Used", wgt.maxCapacity and (fmt(wgt.maxCapacity, 0) .. "mAh") or "--", wgt.minCharge and (fmt(wgt.minCharge, 0) .. "% left") },
+      { "Min volt", wgt.minVoltage and (fmt(wgt.minVoltage, 1) .. "v") or "--", wgt.minCellVoltage and ("cell " .. fmt(wgt.minCellVoltage, 2)) },
+      { "Min Bec", wgt.minBecVoltage and (fmt(wgt.minBecVoltage, 1) .. "v") or "--" },
+      { "Max ESC", wgt.maxEscTemp and (fmt(wgt.maxEscTemp, 0) .. "\194\176C") or "--" } },
+  }
+  local tabH, rowGap = 62, 8
+  local tabW = math.floor(panelW / 4)
+  local ty = y + titleH + pad
+  for r = 1, 2 do
+    LV.rect(k, pad, ty, panelW, tabH, COLOR.panel, 6)
+    for i = 1, 4 do
+      local tb = rows[r][i]
+      local tx = pad + (i - 1) * tabW
+      if i > 1 then LV.rect(k, tx, ty + 10, 1, tabH - 20, COLOR.muted) end
+      local key = "fl" .. r .. i
+      LV.v[key], LV.v[key .. "n"] = tb[2], tb[3] or ""
+      LV.tab(k, tx + 2, ty + 1, tabW - 4, tabH - 2, tb[1], key, key .. "n")
+    end
+    ty = ty + tabH + rowGap
+  end
+
+  local gy = ty - rowGap + pad
+  local gh = h - pad - gy
+  LV.rect(k, pad, gy, panelW, gh, COLOR.panel, 6)
+  local rpmB, rpmS = chartAxis(0, stats.maxRpm, true)
+  local curB, curS = chartAxis(0, stats.maxCur, true)
+  local vB, vS = chartAxis(stats.minV or 0, stats.maxV or 1, false)
+  local defs = {
+    { series = s.rpm, bottom = rpmB, step = rpmS, color = COLOR.accent, label = "Headspeed",
+      note = wgt.maxHeadspeed and ("max " .. fmt(wgt.maxHeadspeed, 0)) },
+    { series = s.current, bottom = curB, step = curS, color = COLOR.orange, label = "Current A",
+      note = wgt.maxCurrent and ("max " .. fmt(wgt.maxCurrent, 1)) },
+    { series = s.voltage, bottom = vB, step = vS, color = COLOR.green, label = "Voltage v",
+      note = wgt.minVoltage and ("min " .. fmt(wgt.minVoltage, 1)) },
+  }
+  local lx, ly = pad + 14, gy + 1 + TAB_LABEL_H / 2 + 1
+  for _, d in ipairs(defs) do
+    LV.rect(k, lx, ly - 4, 14, 8, d.color)
+    lx = lx + 20
+    local text = d.label .. (d.note and ("  " .. d.note) or "")
+    LV.text(k, lx, ly, textWidth(text, SMLSIZE) + 4, text, SMLSIZE, COLOR.dim)
+    lx = lx + textWidth(text, SMLSIZE) + 26
+  end
+  -- chart: grid, value labels, one polyline per series, time ticks
+  local cx, cyTop = pad + 8, gy + TAB_LABEL_H + 16
+  local cw, ch = panelW - 16, gh - TAB_LABEL_H - 16 - 28
+  local px, pw = cx + 46, cw - 46 - 90
+  local base, top = cyTop + ch - 1, ch - 1
+  for q = 1, CHART_DIVS do LV.rect(k, px, base - math.floor(q * top / CHART_DIVS), pw, 1, COLOR.barBg) end
+  LV.rect(k, px, base, pw, 1, COLOR.muted)
+  local n = #s.rpm
+  if n < 2 then
+    LV.text(k, px, cyTop + ch / 2, pw, "No data", SMLSIZE, COLOR.muted, CENTER)
+    return
+  end
+  local labelX = { px - 46, px + pw + 6, px + pw + 6 + 45 }
+  local labelAlign = { RIGHT, LEFT, LEFT }
+  for i, d in ipairs(defs) do
+    local decimals = (d.step ~= math.floor(d.step) or d.bottom ~= math.floor(d.bottom)) and 1 or 0
+    for q = 0, CHART_DIVS do
+      LV.text(k, labelX[i], base - math.floor(q * top / CHART_DIVS), 40, fmt(d.bottom + q * d.step, decimals),
+        SMLSIZE, d.color, labelAlign[i])
+    end
+    local pts, idxStep = {}, n / pw
+    local scale = top / (CHART_DIVS * d.step)
+    for x = 0, pw - 1, 4 do
+      local v = (d.series[math.floor(x * idxStep) + 1] - d.bottom) * scale
+      if v < 0 then v = 0 elseif v > top then v = top end
+      pts[#pts + 1] = { px + x, base - math.floor(v) }
+    end
+    k[#k + 1] = { type = "line", pts = pts, color = d.color, thickness = 2 }
+  end
+  local dur = n * s.interval
+  local tStep = TIME_STEPS[#TIME_STEPS]
+  for i = 1, #TIME_STEPS do
+    if dur / TIME_STEPS[i] <= 3 then tStep = TIME_STEPS[i]; break end
+  end
+  local tt = 0
+  while tt <= dur do
+    local tx = px + math.floor(tt / dur * (pw - 1))
+    LV.rect(k, tx, cyTop + ch, 1, 4, COLOR.muted)
+    LV.text(k, tx - 30, cyTop + ch + 13, 60, fmtTime(tt), SMLSIZE, COLOR.muted, CENTER)
+    tt = tt + tStep
+  end
+end
+
+-- small zones (not the 800x480 layout): headspeed + pack voltage
+function LV.buildSmall(k, wgt, w, h)
+  LV.rect(k, 0, 0, w, h, COLOR.bg)
+  LV.text(k, 6, h / 2, w / 2, LV.dv("rpm", "--"), (h >= 60) and MIDSIZE or 0, COLOR.white)
+  LV.text(k, w / 2, h / 2, w / 2 - 6, LV.dv("volt", "--"), (h >= 60) and MIDSIZE or 0, COLOR.white, RIGHT)
+end
+
+-- menu card over standby / dashboard (Rotorflight / ExpressLRS / battery)
+function LV.buildMenu(k, wgt, w, h)
+  local mw, rowH = 460, 64
+  local mh = 56 + #MENU_ITEMS * (rowH + 8) + 56
+  local mx, my = math.floor((w - mw) / 2), math.floor((h - mh) / 2)
+  local vis = function() return wgt.menu ~= nil end
+  LV.rect(k, mx, my, mw, mh, COLOR.accent, 8, { visible = vis })
+  LV.rect(k, mx + 2, my + 2, mw - 4, mh - 4, COLOR.panel, 7, { visible = vis })
+  LV.text(k, mx + 20, my + 28, 300, "Menu", MIDSIZE, COLOR.white, LEFT, { visible = vis })
+  for i, item in ipairs(MENU_ITEMS) do
+    local ry = my + 56 + (i - 1) * (rowH + 8)
+    LV.button(k, mx + 14, ry, mw - 28, rowH, item.label, function()
+      if wgt.menu and wgt.lastT then openMenuItem(wgt, wgt.lastT, LV.v.connected, item.key) end
+    end, MIDSIZE, { visible = vis, textColor = LV.dv("menuColor" .. i, COLOR.white) })
+  end
+  LV.button(k, mx + mw - 14 - 140, my + mh - 50, 140, 40, "Close", function() wgt.menu = nil end, 0, { visible = vis })
+  LV.text(k, mx + 20, my + mh - 30, mw - 200, LV.dv("menuNote", ""), SMLSIZE, COLOR.dim, LEFT, { visible = vis })
+end
+
+function LV.buildToolMsg(k, wgt, w, h)
+  local vis = function() return LV.v.toolMsg ~= nil end
+  LV.rect(k, 40, h - 64, w - 80, 44, COLOR.red, 6, { visible = vis })
+  LV.text(k, 50, h - 42, w - 100, LV.dv("toolMsg", ""), SMLSIZE, COLOR.white, CENTER, { visible = vis })
+end
+
+function LV.build(wgt, screen, t)
+  local w, h = wgt.zone.w, wgt.zone.h
+  local k = {}
+  LV.rect(k, 0, 0, w, h, COLOR.bg)
+  if screen == "small" then
+    LV.buildSmall(k, wgt, w, h)
+  elseif screen == "standby" then
+    LV.buildStandby(k, wgt, w, h)
+  elseif screen == "busy" then
+    LV.text(k, 20, h / 2, w - 40, LV.dv("busy", ""), MIDSIZE, COLOR.white, CENTER)
+  elseif screen == "armwarning" then
+    LV.buildArmWarning(k, wgt, w, h, t.armd)
+  elseif screen == "battselect" then
+    LV.buildBattSelect(k, wgt, w, h)
+  elseif screen == "flightlog" then
+    LV.buildFlightLog(k, wgt, w, h)
+  else
+    LV.buildDashboard(k, wgt, w, h)
+  end
+  if screen == "standby" or screen == "dashboard" then LV.buildMenu(k, wgt, w, h) end
+  if screen ~= "small" then LV.buildToolMsg(k, wgt, w, h) end
+  if CONFIG.perfOverlay and screen ~= "small" then
+    LV.text(k, w - 304, h - 10, 300, LV.dv("perf", ""), SMLSIZE, COLOR.dim, RIGHT)
+  end
+  lvgl.clear()
+  lvgl.build(k)
+end
+
+-- Per-frame values for the labels of the current screen.
+function LV.update(wgt, t, screen, connected, armed)
+  local v = LV.v
+  v.connected, v.armed = connected, armed
+  local info = model and model.getInfo and model.getInfo()
+  v.model = info and info.name or ""
+  if wgt.toolMsg and getTime() - wgt.toolMsg.at <= 300 then v.toolMsg = wgt.toolMsg.text
+  else wgt.toolMsg, v.toolMsg = nil, nil end
+  local ok, dt = pcall(getDateTime)
+  if not ok then dt = nil end
+  local txPct, txV = getTxBatteryPct()
+  v.txPct, v.txColor = txPct or 0, getChargeColor(txPct)
+
+  if screen == "small" then
+    v.rpm, v.volt = fmt(t.rpm, 0), fmtUnit(t.voltage, 1, "v")
+    return
+  end
+  if screen == "standby" then
+    v.hhmm = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
+    v.date = dt and string.format("%04d/%02d/%02d", dt.year, dt.mon, dt.day) or ""
+    v.waiting = "Waiting for connection" .. string.rep(".", math.floor(getTime() / 50) % 4)
+    v.standbyHint = touchHint() or "Power on the model"
+    v.txV = txV and (fmt(txV, 1) .. "v") or "--"
+    v.txPctText = txPct and (fmt(txPct, 0) .. "%") or ""
+    v.lastFlight = (wgt.flightSeconds or 0) > 0 and fmtTime(wgt.flightSeconds) or "--"
+    v.lastUsed = wgt.maxCapacity and (fmt(wgt.maxCapacity, 0) .. "mAh") or ""
+    local labels = CONFIG.alarm.voiceLabels
+    local voiceIdx = math.floor((wgt.options and wgt.options.Voice) or 0)
+    v.voice = labels[voiceIdx + 1] or labels[1]
+    if not CONFIG.alarm.enabled then v.alarms, v.alarmsColor = "Off", COLOR.grey
+    elseif wgt.alarmMuted then v.alarms, v.alarmsColor = "Muted", COLOR.orange
+    else v.alarms, v.alarmsColor = "On", COLOR.green end
+  else
+    v.clock = dt and string.format("%04d/%02d/%02d %02d:%02d", dt.year, dt.mon, dt.day, dt.hour, dt.min) or ""
+    v.sig = t.signal or 0
+    local warnings = {}
+    if t.perCellVoltage and t.perCellVoltage < CONFIG.vCellWarn then
+      warnings[#warnings + 1] = string.format("Low cell voltage: %.2fv", t.perCellVoltage)
+    end
+    if t.temp and t.temp >= CONFIG.escTempWarn then
+      warnings[#warnings + 1] = string.format("Esc temp high: %d\194\176C", math.floor(t.temp))
+    end
+    v.warn = (#warnings > 0) and warnings[math.floor(getTime() / 200) % #warnings + 1] or ""
+  end
+
+  if screen == "dashboard" then
+    v.volt, v.voltMin = fmtUnit(t.voltage, 1, "v"), wgt.minVoltage and ("min " .. fmt(wgt.minVoltage, 1) .. "v") or ""
+    v.vcel = fmtUnit(t.perCellVoltage, 2, "v")
+    v.curr, v.currMax = fmtUnit(t.current, 1, "A"), wgt.maxCurrent and ("max " .. fmt(wgt.maxCurrent, 1) .. "A") or ""
+    v.bec, v.becMin = fmtUnit(t.becV, 1, "v"), wgt.minBecVoltage and ("min " .. fmt(wgt.minBecVoltage, 1) .. "v") or ""
+    v.rpm, v.rpmMax = fmt(t.rpm, 0), wgt.maxHeadspeed and ("max " .. fmt(wgt.maxHeadspeed, 0)) or ""
+    if t.armFlags ~= nil then
+      v.arm, v.armColor = armed and "Armed" or "Disarmed", armed and COLOR.green or COLOR.grey
+    else
+      v.arm, v.armColor = "N/a", COLOR.muted
+    end
+    if t.gov then
+      v.govLabel, v.gov, v.govColor = "Governor", toSentenceCase(t.gov), getGovColor(t.gov)
+    else
+      local running = t.rpm and t.rpm > CONFIG.rpmRunningThreshold
+      v.govLabel, v.gov, v.govColor = "Motor", running and "On" or "Off", running and COLOR.green or COLOR.grey
+    end
+    v.flight = fmtTime(wgt.flightSeconds)
+    if t.pidProfile and t.bank then v.profile = fmt(t.pidProfile, 0) .. "/" .. fmt(t.bank, 0)
+    elseif t.bank then v.profile = fmt(t.bank, 0)
+    elseif t.pidProfile then v.profile = fmt(t.pidProfile, 0)
+    else v.profile = "--" end
+    if t.charge and t.capacity then v.battValue = fmt(t.charge, 0) .. "% / " .. fmt(t.capacity, 0) .. "mAh"
+    elseif t.charge then v.battValue = fmtUnit(t.charge, 0, "%")
+    elseif t.capacity then v.battValue = fmt(t.capacity, 0) .. "mAh"
+    else v.battValue = "--" end
+    local battLabel = "Battery"
+    if t.battProfile then
+      battLabel = "Battery #" .. t.battProfile
+      local cap = wgt.battCaps and wgt.battCaps[t.battProfile]
+      local custom = CONFIG.batteryProfile.labels[t.battProfile]
+      if cap and cap > 0 then battLabel = battLabel .. " " .. cap .. "mAh"
+      elseif custom and custom ~= "Profile " .. t.battProfile then battLabel = battLabel .. " " .. custom end
+    end
+    v.battLabel, v.charge, v.battColor = battLabel, t.charge or 0, getChargeColor(t.charge)
+    v.thrLabel, v.thr = "Throttle", t.throttle or 0
+    if t.throttle and t.temp then v.thrValue = fmt(t.throttle, 0) .. "% / " .. fmt(t.temp, 0) .. "\194\176C"
+    elseif t.throttle then v.thrValue = fmtUnit(t.throttle, 0, "%")
+    elseif t.temp then v.thrValue = fmt(t.temp, 0) .. "\194\176C"
+    else v.thrValue = "--" end
+  elseif screen == "battselect" and wgt.bp then
+    local bp, cfg, now = wgt.bp, CONFIG.batteryProfile, getTime()
+    v.battProfile = t.battProfile
+    v.bpStatus, v.bpStatusColor = "Select before flight", COLOR.dim
+    if bp.phase == "send" then
+      v.bpStatus = "Applying " .. tostring(bp.target) .. "..."
+    elseif bp.phase == "done" then
+      if bp.result == "fail" then v.bpStatus, v.bpStatusColor = "No change - FC did not respond", COLOR.red
+      else v.bpStatus, v.bpStatusColor = "Profile " .. tostring(t.battProfile or bp.sel) .. " set", COLOR.green end
+    end
+    if bp.phase == "pick" then
+      local left = cfg.timeoutSec - math.floor((now - (bp.lastInput or bp.since)) / 100)
+      if bp.stepped then
+        left = cfg.applyIdleSec - math.floor((now - bp.lastInput) / 100)
+        v.bpHint = "Applies " .. bp.sel .. " in " .. math.max(0, left) .. "s  -  press again for the next"
+      else
+        v.bpHint = "Tap a profile, or press the Close switch to step  -  keeps current in " .. math.max(0, left) .. "s"
+      end
+    else
+      v.bpHint = "Arming closes this screen"
+    end
+  elseif screen == "flightlog" then
+    local remain = CONFIG.flightLogTimeoutSec
+    if wgt.disconnectTime then remain = math.max(0, remain - math.floor((getTime() - wgt.disconnectTime) / 100)) end
+    v.closeText = "Close  " .. remain .. "s"
+  end
+
+  if wgt.menu then
+    local notes = {}
+    for i, item in ipairs(MENU_ITEMS) do
+      local okItem, why = menuItemState(wgt, t, connected, item.key)
+      v["menuColor" .. i] = okItem and COLOR.white or COLOR.muted
+      if not okItem then notes[#notes + 1] = item.label .. ": " .. why end
+    end
+    v.menuNote = notes[1] or ""
+  end
+end
+
+function LV.screenType(wgt, t)
+  if not isTelemetryConnected(t) then return wgt.showFlightLog and "flightlog" or "standby" end
+  if wgt.armWarningActive then return "armwarning" end
+  if wgt.bp and wgt.bp.phase ~= "wait" then return "battselect" end
+  return "dashboard"
+end
+
+-- refresh() for CONFIG.lvgl. Hosted RF2 runs its own lvgl UI (the official
+-- ui_lvgl_runner, as the RfTool widget does) and owns the widget's object
+-- tree until it returns 2; this screen is rebuilt afterwards.
+function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
+  local w, h = wgt.zone.w, wgt.zone.h
+  wgt.lastT = t
+  -- lvgl controls (buttons, RF2's pages) only exist while the widget is
+  -- full screen (EdgeTX 2.12 api_colorlcd_lvgl.cpp buildLvgl skips them
+  -- otherwise, App mode included): rebuild when that changes
+  local okFull, full = pcall(lvgl.isFullScreen)
+  full = okFull and full or false
+  if wgt.hosted then
+    if armed or not full then
+      stopTool(wgt, armed and "Tool closed: armed" or nil)
+      wgt.lvScreen = nil
+    else
+      local run, compiling = wgt.hosted.run, wgt.hosted.compiling
+      local ok, ret = pcall(run, event or 0, touchState, false)
+      if ok and ret == 0 and rf2 and rf2.mspQueue and not rf2.mspQueue:isProcessed() then
+        pcall(rf2.mspQueue.processQueue, rf2.mspQueue)
+      end
+      if not ok then
+        stopTool(wgt, "Tool error: " .. tostring(ret))
+        wgt.lvScreen = nil
+      elseif ret and ret ~= 0 then
+        stopTool(wgt)
+        wgt.lvScreen = nil
+        if compiling then openMenuItem(wgt, t, connected, "rf2") end
+      elseif not compiling then
+        return -- RF2's own screen
+      else
+        LV.v.busy = "Compiling Rotorflight Lua - first start only"
+        if wgt.lvScreen ~= "busy" then LV.build(wgt, "busy", t); wgt.lvScreen = "busy" end
+        return
+      end
+    end
+  end
+
+  local screen = (h < 160) and "small" or LV.screenType(wgt, t)
+  wgt.lastScreenType = screen
+  if (armed or (screen ~= "standby" and screen ~= "dashboard")) then wgt.menu = nil end
+
+  -- keys (full screen only): ENTER = menu / pick / close log, RTN closes
+  if event and event ~= 0 then
+    if wgt.menu then
+      if event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then wgt.menu = nil end
+    elseif screen == "battselect" and wgt.bp and wgt.bp.phase == "pick" then
+      if event == EVT_VIRTUAL_NEXT then bpStep(wgt, 1)
+      elseif event == EVT_VIRTUAL_PREV then bpStep(wgt, -1)
+      elseif event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK then bpChoose(wgt, t)
+      elseif event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then wgt.bp = nil end
+    elseif screen == "flightlog" and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
+      wgt.showFlightLog = false
+    elseif screen == "dashboard" and not armed and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
+      wgt.menu = { sel = 1 }
+    end
+  end
+
+  if wgt.lvScreen ~= screen or wgt.lvTheme ~= COLOR or wgt.lvW ~= w or wgt.lvH ~= h or wgt.lvFull ~= full
+     or wgt.lvModel ~= wgt.modelImagePath or (screen == "armwarning" and wgt.lvArmd ~= t.armd) then
+    LV.update(wgt, t, screen, connected, armed)
+    LV.build(wgt, screen, t)
+    wgt.lvScreen, wgt.lvTheme, wgt.lvW, wgt.lvH, wgt.lvModel, wgt.lvArmd = screen, COLOR, w, h, wgt.modelImagePath, t.armd
+    wgt.lvFull = full
+  else
+    LV.update(wgt, t, screen, connected, armed)
+  end
+  -- frame timing (same numbers as perfOverlay, shown by a label)
+  if CONFIG.perfOverlay then
+    local p = wgt.perf
+    if not p then p = { n = 0, tick = 0, ui = 0, frame = 0 }; wgt.perf = p end
+    if p.last then p.frame = p.frame + (t0 - p.last) end
+    p.last = t0
+    p.n, p.tick, p.ui = p.n + 1, p.tick + (t1 - t0), p.ui + (getTime() - t1)
+    if p.n >= 20 then
+      local fps10 = math.floor(p.n * 1000 / math.max(p.frame, 1))
+      local okKb, kb = pcall(collectgarbage, "count")
+      if not okKb or type(kb) ~= "number" then kb = 0 end
+      LV.v.perf = string.format("%d.%d fps  tick %d  lua %d ms  %dk", math.floor(fps10 / 10), fps10 % 10,
+        math.floor(p.tick * 10 / p.n), math.floor(p.ui * 10 / p.n), math.floor(kb))
+      p.n, p.tick, p.ui, p.frame = 0, 0, 0, 0
+    end
+  end
 end
 
 -- Frame timing (CONFIG.perfOverlay), bottom-right: fps, ms per frame in
@@ -4002,6 +4692,9 @@ local function refresh(wgt, event, touchState)
   ensureModelImage(wgt)
   ensureTxBatteryIcons(wgt)
   local armed = t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1
+  if CONFIG.lvgl and lvgl then
+    return LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
+  end
   local w, h = wgt.zone.w, wgt.zone.h
 
   -- A hosted tool (RF2 / ELRS) owns the screen and the keys until it
@@ -4173,4 +4866,5 @@ return {
   update = update,
   refresh = refresh,
   background = background,
+  useLvgl = (CONFIG.lvgl and lvgl ~= nil) or nil,
 }

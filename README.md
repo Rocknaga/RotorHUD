@@ -81,6 +81,17 @@ EdgeTX 2.12 の **App mode** レイアウトを使うと、Enter 長押しだけ
 - 左上の EdgeTX アイコンは、App mode で**全画面でないとき**に EdgeTX 本体が出すもので、設定では消せない
   (EdgeTX 2.12 のソース `view_main.cpp` で確認)。全画面にすると消える
 
+## 描画方式 (lvgl)
+
+EdgeTX の lvgl ウィジェットとして描く (`CONFIG.lvgl = true`)。各画面を 1 回組み立て、変わった値だけを再描画する。
+実機の計測 (tools/diagtest の DrawBench / LvglBench) で、従来の lcd 描画 4〜6fps に対し lvgl は 12〜20fps。
+- ボタン (メニュー、バッテリー選択のタイル、フライトログの Close、RF2 設定) は**全画面のときだけ**出る (EdgeTX の仕様)。
+  App mode で ENTER 長押し → 全画面
+- Rotorflight settings は公式 RF2 の **lvgl 版 UI** (タッチ対応の GUI) をウィジェット内で開く。RTN で戻る
+- ExpressLRS ツールは lcd 描画のため lvgl 版では開けない (SYS > Tools から使う)
+- 待機画面の小さなアイコンと、画面切替のワイプ演出は lvgl 版には無い
+- `CONFIG.lvgl = false` で従来の lcd 描画に戻る (下記の RF2 カード型画面などはこちら用)
+
 ## 設定メニュー (Rotorflight / ExpressLRS / バッテリープロファイル)
 
 全画面表示中、待機画面かダッシュボードで **ENTER (またはタップ)** → メニュー。ダイヤルで選び ENTER (またはタップ)、RTN で閉じる。
