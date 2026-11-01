@@ -355,6 +355,16 @@ local CONFIG = {
     -- Haptic patterns: { duration, pause } per pulse, passed to playHaptic.
     -- UNVERIFIED on TX16S MK3: whether it has a vibration motor at all, and
     -- whether playHaptic's units are ms or 10ms - tune on the radio.
+    -- Sound effects (playTone: Hz, ms on, ms pause) ahead of the voice:
+    -- link up / down, and every caution / critical alarm. Settings >
+    -- Voice > Sound effects, muted with the Mute switch like the voice.
+    tones = true,
+    toneEffects = {
+      connect    = { { 880, 80, 30 }, { 1320, 140, 0 } },          -- rising
+      disconnect = { { 1320, 80, 30 }, { 880, 140, 0 } },          -- falling
+      caution    = { { 1000, 100, 80 }, { 1000, 100, 0 } },        -- two beeps
+      critical   = { { 2000, 70, 40 }, { 2000, 70, 40 }, { 2000, 70, 0 } }, -- three fast, high
+    },
     hapticCaution  = { { 30, 0 } },
     hapticCritical = { { 60, 30 }, { 60, 30 }, { 60, 0 } },
     -- Option C: set true when the EdgeTX logical-switch backup
@@ -756,21 +766,24 @@ end
 
 -- ============================== USER SETTINGS =============================
 -- Settings changed on the radio by touch (Menu > Settings, full screen),
--- kept on the SD card in SETTINGS_FILE as key=value lines and loaded at
+-- kept on the SD card in SET.file as key=value lines and loaded at
 -- start. A value set here wins over the matching widget option (Theme,
 -- Voice, BattLand) and over CONFIG. To add a setting: one entry in
 -- SETTINGS (group = the tab it shows in), with apply() putting the value
 -- where the code reads it; the Settings screen (LVGL VIEW) lists it.
-local SETTINGS_FILE = "/WIDGETS/RFTelem/settings.txt"
+local SET = {}
+SET.file = "/WIDGETS/RFTelem/settings.txt"
 local USER = {}
-local SETTINGS_GROUPS = { "Voice", "Alarms", "Display" }
+SET.groups = { "Voice", "Alarms", "Display" }
 local SETTINGS = {
   { key = "voice", group = "Voice", label = "Voice", kind = "choice", choices = CONFIG.alarm.voiceLabels,
-    option = "Voice", test = true },
+    option = "Voice", test = "voice" },
   { key = "alarms", group = "Voice", label = "Alarms", kind = "bool",
     default = CONFIG.alarm.enabled, apply = function(v) CONFIG.alarm.enabled = v end },
   { key = "haptic", group = "Voice", label = "Vibration", kind = "bool",
     default = true, apply = function(v) CONFIG.alarm.haptic = v end },
+  { key = "tones", group = "Voice", label = "Sound effects", kind = "bool",
+    default = true, apply = function(v) CONFIG.alarm.tones = v end, test = "tones" },
   { key = "battLand", group = "Alarms", label = "Land at battery", kind = "number", min = 10, max = 50, step = 5,
     unit = "%", option = "BattLand", default = CONFIG.alarm.battLand },
   { key = "cellCaution", group = "Alarms", label = "Cell caution", kind = "number", min = 3.30, max = 3.90,
@@ -794,7 +807,7 @@ local SETTINGS = {
 }
 
 -- current value: the user's, else the widget option, else the default
-local function settingValue(wgt, def)
+function SET.value(wgt, def)
   local u = USER[def.key]
   if u ~= nil then return u end
   local o = def.option and wgt and wgt.options and wgt.options[def.option]
@@ -805,9 +818,9 @@ local function settingValue(wgt, def)
   return def.default
 end
 
-local function saveSettings()
+function SET.save()
   pcall(function()
-    local f = io.open(SETTINGS_FILE, "w")
+    local f = io.open(SET.file, "w")
     if not f then return end
     for _, def in ipairs(SETTINGS) do
       local v = USER[def.key]
@@ -820,9 +833,9 @@ local function saveSettings()
   end)
 end
 
-local function loadSettings()
+function SET.load()
   pcall(function()
-    local f = io.open(SETTINGS_FILE, "r")
+    local f = io.open(SET.file, "r")
     if not f then return end
     local text = io.read(f, 2048) or ""
     io.close(f)
@@ -840,7 +853,7 @@ local function loadSettings()
   end
 end
 
-local function setSetting(def, v)
+function SET.set(def, v)
   if def.kind == "number" then
     v = math.max(def.min, math.min(def.max, v))
     v = math.floor(v / def.step + 0.5) * def.step
@@ -848,11 +861,11 @@ local function setSetting(def, v)
   end
   USER[def.key] = v
   if def.apply then def.apply(v) end
-  saveSettings()
+  SET.save()
 end
 
-local function settingText(wgt, def)
-  local v = settingValue(wgt, def)
+function SET.text(wgt, def)
+  local v = SET.value(wgt, def)
   if def.kind == "bool" then return v and "On" or "Off" end
   if def.kind == "choice" then return def.choices[(v or 0) + 1] or def.choices[1] end
   if v == nil then return "--" end
@@ -862,7 +875,7 @@ end
 -- ============================== WIDGET API ================================
 
 local function create(zone, options)
-  loadSettings()
+  SET.load()
   return {
     zone = zone,
     options = options,
@@ -2571,6 +2584,21 @@ local function playPattern(pattern)
   for i = 1, #pattern do playHaptic(pattern[i][1], pattern[i][2]) end
 end
 
+-- One of CONFIG.alarm.toneEffects, unless effects are off or muted.
+local function playEffect(wgt, name, force)
+  local cfg = CONFIG.alarm
+  local tones = cfg.toneEffects[name]
+  if not tones or not playTone then return end
+  if not force and (cfg.tones == false or (wgt and wgt.alarmMuted)) then return end
+  for i = 1, #tones do playTone(tones[i][1], tones[i][2], tones[i][3]) end
+  if CONFIG.simulate then
+    pcall(function()
+      local f = io.open("/LOGS/rftelem_alarms.log", "a")
+      if f then io.write(f, string.format("%.2f tone %s", getTime() / 100, name), "\n"); io.close(f) end
+    end)
+  end
+end
+
 -- Folder of the voice set chosen with the "Voice" option (0-based index
 -- into CONFIG.alarm.voiceSets; out of range falls back to the first set).
 local function voiceSetDir(wgt)
@@ -2585,6 +2613,7 @@ end
 local function alert(wgt, tier, voice)
   local cfg = CONFIG.alarm
   local muted = wgt.alarmMuted
+  if tier == "critical" or tier == "caution" then playEffect(wgt, tier) end
   local files = (type(voice) == "table") and voice or { voice }
   for i = 1, #files do
     local path = cfg.dir .. voiceSetDir(wgt) .. "/" .. files[i] .. ".wav"
@@ -2681,15 +2710,17 @@ local function runAlarms(wgt, t, running, connected)
   if connected ~= wgt.alarmLink then
     local own = not cfg.edgetxLinkVoice -- false: EdgeTX already says it
     if connected then
+      playEffect(wgt, "connect")
       if own then alert(wgt, "info", "connected") end
       a.sayFirst.arm, a.sayFirst.armd, a.sayFirst.bank, a.sayFirst.pid = true, true, true, true
       a.sayFirst.battprof = true
       a.quietUntil = getTime() + (cfg.edgetxLinkVoice and cfg.connectQuietSec * 100 or 0)
     elseif wgt.alarmLink ~= nil then
       if wgt.wasRunning then
-        alert(wgt, "critical", own and "telemetry_lost" or {}) -- haptic either way
-      elseif own then
-        alert(wgt, "info", "disconnected")
+        alert(wgt, "critical", own and "telemetry_lost" or {}) -- haptic + effect either way
+      else
+        playEffect(wgt, "disconnect")
+        if own then alert(wgt, "info", "disconnected") end
       end
     end
     wgt.alarmLink = connected
@@ -3041,8 +3072,9 @@ end
 -- display scales are rotorflight-lua-scripts' MSP/mspPidTuning.lua,
 -- mspRcTuning.lua + MSP/RATES/*.lua and mspGovernorProfile.lua: a value
 -- shows as raw / scale, whole numbers when scale <= 1.
-local function fcU16(buf, i) return (buf[i] or 0) + (buf[i + 1] or 0) * 256 end
-local function fcScaled(raw, scale)
+local FC = {}
+function FC.u16(buf, i) return (buf[i] or 0) + (buf[i + 1] or 0) * 256 end
+function FC.scaled(raw, scale)
   if raw == nil then return "--" end
   if not scale then return tostring(raw) end
   local v = raw / scale
@@ -3052,7 +3084,7 @@ local function fcScaled(raw, scale)
   return (string.gsub(string.format("%.2f", v), "0$", ""))
 end
 -- rates type -> column headings and scales (rcRates, rates, rcExpo)
-local FC_RATE_TYPES = {
+FC.rateTypes = {
   [0] = { "NONE",    { "RC Rate", "Rate", "RC Expo" },   { nil, nil, nil },   { nil, nil, nil } },
   [1] = { "BETAFL",  { "RC Rate", "Rate", "RC Expo" },   { 100, 100, 100 },   { 100, 100, 100 } },
   [2] = { "RACEFL",  { "Rate", "Acro+", "Expo" },        { 0.1, nil, nil },   { 4, nil, nil } },
@@ -3061,31 +3093,31 @@ local FC_RATE_TYPES = {
   [5] = { "QUICK",   { "RC Rate", "Max Rate", "Expo" },  { 100, 0.1, 100 },   { 100, 0.208, 100 } },
   [6] = { "ROTORFL", { "Rate", "Shape", "Expo" },        { 0.2, 1, 1 },       { 8, 1, 1 } },
 }
-local FC_PAGES = {
+FC.pages = {
   { cmd = 112, title = "PID gains", -- MSP_PID_TUNING
     parse = function(b)
       local cols = { "P", "I", "D", "F", "B", "O" }
       local function axis(base, bOff, oOff)
-        return { fcU16(b, base), fcU16(b, base + 2), fcU16(b, base + 4), fcU16(b, base + 6),
-                 fcU16(b, bOff), oOff and fcU16(b, oOff) or "-" }
+        return { FC.u16(b, base), FC.u16(b, base + 2), FC.u16(b, base + 4), FC.u16(b, base + 6),
+                 FC.u16(b, bOff), oOff and FC.u16(b, oOff) or "-" }
       end
       return { kind = "table", cols = cols, sig = "pid",
         rows = { { "Roll", axis(1, 25, 31) }, { "Pitch", axis(9, 27, 33) }, { "Yaw", axis(17, 29, nil) } } }
     end },
   { cmd = 111, title = "Rates", -- MSP_RC_TUNING
     parse = function(b)
-      local rt = FC_RATE_TYPES[b[1] or 0] or FC_RATE_TYPES[0]
+      local rt = FC.rateTypes[b[1] or 0] or FC.rateTypes[0]
       local rows, names = {}, { "Roll", "Pitch", "Yaw", "Collective" }
       for a = 0, 3 do
         local base, sc = 2 + a * 6, (a == 3) and rt[4] or rt[3]
-        rows[a + 1] = { names[a + 1], { fcScaled(b[base], sc[1]), fcScaled(b[base + 2], sc[2]), fcScaled(b[base + 1], sc[3]) } }
+        rows[a + 1] = { names[a + 1], { FC.scaled(b[base], sc[1]), FC.scaled(b[base + 2], sc[2]), FC.scaled(b[base + 1], sc[3]) } }
       end
       return { kind = "table", cols = rt[2], rows = rows, note = rt[1], sig = "rates" .. rt[1] }
     end },
   { cmd = 148, title = "Governor profile", -- MSP_GOVERNOR_PROFILE
     parse = function(b)
       local items = {
-        { "Headspeed", fcU16(b, 1) .. " rpm" }, { "Gain", b[3] }, { "P gain", b[4] }, { "I gain", b[5] },
+        { "Headspeed", FC.u16(b, 1) .. " rpm" }, { "Gain", b[3] }, { "P gain", b[4] }, { "I gain", b[5] },
         { "D gain", b[6] }, { "F gain", b[7] }, { "TTA gain", b[8] }, { "TTA limit", (b[9] or "--") .. "%" },
         { "Yaw weight", b[10] }, { "Cyclic weight", b[11] }, { "Coll. weight", b[12] },
         { "Max throttle", (b[13] or "--") .. "%" },
@@ -3096,7 +3128,7 @@ local FC_PAGES = {
     end },
 }
 -- RF2's simulator replies, so CONFIG.simulate shows the pages too
-local FC_SIM_REPLIES = {
+FC.sim = {
   [112] = { 70, 0, 225, 0, 90, 0, 120, 0, 100, 0, 200, 0, 70, 0, 120, 0, 100, 0, 125, 0, 83, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 25, 0 },
   [111] = { 6, 50, 40, 12, 0, 0, 0, 50, 40, 12, 0, 0, 0, 80, 50, 12, 0, 0, 0, 100, 0, 12, 0, 0, 0 },
   [148] = { 0x34, 0x08, 40, 10, 20, 0, 10, 0, 20, 20, 10, 10, 100, 10, 10 },
@@ -3111,7 +3143,7 @@ local function rfMspUpdate(wgt, connected)
   if CONFIG.simulate or not cfg.decode or not connected or wgt.hosted then return end
   local now = getTime()
   if wgt.infoView then -- an FC settings page is open: its data first
-    local cmd = FC_PAGES[wgt.infoView].cmd
+    local cmd = FC.pages[wgt.infoView].cmd
     wgt.fc = wgt.fc or {}
     if not wgt.fc[cmd] and now - (rt.fcAskedAt or -1000) >= 100 then
       if mspRequest(cmd, {}) then rt.fcAskedAt = now end
@@ -3357,10 +3389,10 @@ local function tick(wgt)
   local pageOn = sourceActive(wgt.options and wgt.options.Page)
   if pageOn and not wgt.pageWasOn and connected and not armedNow then
     local nextView = (wgt.infoView or 0) + 1
-    wgt.infoView = (nextView <= #FC_PAGES) and nextView or nil
+    wgt.infoView = (nextView <= #FC.pages) and nextView or nil
     if wgt.infoView then
       wgt.fc = wgt.fc or {}
-      wgt.fc[FC_PAGES[wgt.infoView].cmd] = CONFIG.simulate and FC_SIM_REPLIES[FC_PAGES[wgt.infoView].cmd] or nil
+      wgt.fc[FC.pages[wgt.infoView].cmd] = CONFIG.simulate and FC.sim[FC.pages[wgt.infoView].cmd] or nil
     end
   end
   wgt.pageWasOn = pageOn
@@ -4153,12 +4185,12 @@ local function openMenuItem(wgt, t, connected, key)
     return
   end
   if key == "settings" then
-    wgt.settings = { group = SETTINGS_GROUPS[1] }
+    wgt.settings = { group = SET.groups[1] }
     return
   end
   if key == "view" then
     wgt.infoView, wgt.fc = 1, {}
-    if CONFIG.simulate then wgt.fc[FC_PAGES[1].cmd] = FC_SIM_REPLIES[FC_PAGES[1].cmd] end
+    if CONFIG.simulate then wgt.fc[FC.pages[1].cmd] = FC.sim[FC.pages[1].cmd] end
     return
   end
   local okStart, run, err, compiling = pcall(key == "rf2" and ((CONFIG.lvgl and lvgl) and startRf2Lvgl or startRf2) or startElrs, wgt.fcApi)
@@ -4633,13 +4665,13 @@ function LV.buildFlightLog(k, wgt, w, h)
   end
 end
 
--- FC settings page (read only): FC_PAGES[wgt.infoView], parsed from the
+-- FC settings page (read only): FC.pages[wgt.infoView], parsed from the
 -- MSP reply in wgt.fc. Built again whenever that reply changes.
 function LV.buildFcView(k, wgt, w, h, t, parsed)
   LV.topBar(k, wgt, w, false)
   local pad, y = 12, 12 + 30 + 12
   local panelW = w - pad * 2
-  local page = FC_PAGES[wgt.infoView]
+  local page = FC.pages[wgt.infoView]
   local titleH = 44
   LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
   LV.text(k, pad + 14, y + titleH / 2, 260, page.title, MIDSIZE, COLOR.white)
@@ -4648,13 +4680,13 @@ function LV.buildFcView(k, wgt, w, h, t, parsed)
   elseif page.cmd ~= nil then sub = "PID profile " .. (t.pidProfile and fmt(t.pidProfile, 0) or "--") end
   if parsed and parsed.note then sub = sub .. "   " .. parsed.note end
   LV.text(k, pad + 270, y + titleH / 2, 260, sub, SMLSIZE, COLOR.dim)
-  LV.text(k, pad + panelW - 214, y + titleH / 2, 200, wgt.infoView .. " / " .. #FC_PAGES, SMLSIZE, COLOR.muted, RIGHT)
+  LV.text(k, pad + panelW - 214, y + titleH / 2, 200, wgt.infoView .. " / " .. #FC.pages, SMLSIZE, COLOR.muted, RIGHT)
   -- full screen only (buttons): next page / close
   LV.button(k, pad + panelW - 8 - 100 - 8 - 100, y + 6, 100, titleH - 12, "Next", function()
     local n = (wgt.infoView or 0) + 1
-    wgt.infoView = (n <= #FC_PAGES) and n or 1
+    wgt.infoView = (n <= #FC.pages) and n or 1
     wgt.fc = wgt.fc or {}
-    wgt.fc[FC_PAGES[wgt.infoView].cmd] = CONFIG.simulate and FC_SIM_REPLIES[FC_PAGES[wgt.infoView].cmd] or nil
+    wgt.fc[FC.pages[wgt.infoView].cmd] = CONFIG.simulate and FC.sim[FC.pages[wgt.infoView].cmd] or nil
   end, 0)
   LV.button(k, pad + panelW - 8 - 100, y + 6, 100, titleH - 12, "Close", function() wgt.infoView = nil end, 0)
 
@@ -4713,7 +4745,7 @@ function LV.buildSettings(k, wgt, w, h)
   local ch = h - pad - cy
   local tabW = 170
   LV.rect(k, pad, cy, tabW, ch, COLOR.panel, 6)
-  for i, g in ipairs(SETTINGS_GROUPS) do
+  for i, g in ipairs(SET.groups) do
     LV.button(k, pad + 8, cy + 8 + (i - 1) * 64, tabW - 16, 56, g, function() wgt.settings.group = g end, MIDSIZE, {
       color = function() return (wgt.settings and wgt.settings.group == g) and COLOR.accent or COLOR.barBg end })
   end
@@ -4729,23 +4761,28 @@ function LV.buildSettings(k, wgt, w, h)
       LV.text(k, rx + 16, mid, 230, def.label, 0, COLOR.white)
       local key = "set_" .. def.key
       if def.kind == "number" then
-        LV.button(k, x0, ry, 64, 52, "-", function() setSetting(def, settingValue(wgt, def) - def.step) end, MIDSIZE)
+        LV.button(k, x0, ry, 64, 52, "-", function() SET.set(def, SET.value(wgt, def) - def.step) end, MIDSIZE)
         LV.text(k, x0 + 72, mid, 160, LV.dv(key, ""), MIDSIZE, COLOR.white, CENTER)
-        LV.button(k, x0 + 240, ry, 64, 52, "+", function() setSetting(def, settingValue(wgt, def) + def.step) end, MIDSIZE)
+        LV.button(k, x0 + 240, ry, 64, 52, "+", function() SET.set(def, SET.value(wgt, def) + def.step) end, MIDSIZE)
       elseif def.kind == "bool" then
-        LV.button(k, x0, ry, 200, 52, "", function() setSetting(def, not settingValue(wgt, def)) end, MIDSIZE, {
+        LV.button(k, x0, ry, 200, 52, "", function() SET.set(def, not SET.value(wgt, def)) end, MIDSIZE, {
           text = LV.dv(key, ""),
-          color = function() return settingValue(wgt, def) and COLOR.accent or COLOR.barBg end })
+          color = function() return SET.value(wgt, def) and COLOR.accent or COLOR.barBg end })
+        if def.test == "tones" then -- the four effects in a row
+          LV.button(k, x0 + 274, ry, 84, 52, "Test", function()
+            for _, name in ipairs({ "connect", "caution", "critical", "disconnect" }) do playEffect(wgt, name, true) end
+          end, 0)
+        end
       elseif #def.choices <= 3 then
         for c, label in ipairs(def.choices) do
-          LV.button(k, x0 + (c - 1) * 108, ry, 100, 52, label, function() setSetting(def, c - 1) end, 0, {
-            color = function() return settingValue(wgt, def) == c - 1 and COLOR.accent or COLOR.barBg end })
+          LV.button(k, x0 + (c - 1) * 108, ry, 100, 52, label, function() SET.set(def, c - 1) end, 0, {
+            color = function() return SET.value(wgt, def) == c - 1 and COLOR.accent or COLOR.barBg end })
         end
       else
         local n = #def.choices
-        LV.button(k, x0, ry, 64, 52, "<", function() setSetting(def, (settingValue(wgt, def) - 1) % n) end, MIDSIZE)
+        LV.button(k, x0, ry, 64, 52, "<", function() SET.set(def, (SET.value(wgt, def) - 1) % n) end, MIDSIZE)
         LV.text(k, x0 + 68, mid, 128, LV.dv(key, ""), 0, COLOR.white, CENTER)
-        LV.button(k, x0 + 200, ry, 64, 52, ">", function() setSetting(def, (settingValue(wgt, def) + 1) % n) end, MIDSIZE)
+        LV.button(k, x0 + 200, ry, 64, 52, ">", function() SET.set(def, (SET.value(wgt, def) + 1) % n) end, MIDSIZE)
         if def.test then
           LV.button(k, x0 + 274, ry, 84, 52, "Test", function()
             if playFile then playFile(CONFIG.alarm.dir .. voiceSetDir(wgt) .. "/armed.wav") end
@@ -4936,7 +4973,7 @@ function LV.update(wgt, t, screen, connected, armed)
 
   if screen == "settings" and wgt.settings then
     for _, def in ipairs(SETTINGS) do
-      if def.group == wgt.settings.group then v["set_" .. def.key] = settingText(wgt, def) end
+      if def.group == wgt.settings.group then v["set_" .. def.key] = SET.text(wgt, def) end
     end
   end
   if wgt.menu then
@@ -4955,7 +4992,7 @@ function LV.screenType(wgt, t)
   if not isTelemetryConnected(t) then return wgt.showFlightLog and "flightlog" or "standby" end
   if wgt.armWarningActive then return "armwarning" end
   if wgt.bp and wgt.bp.phase ~= "wait" then return "battselect" end
-  if wgt.infoView and FC_PAGES[wgt.infoView] then return "fcview" end
+  if wgt.infoView and FC.pages[wgt.infoView] then return "fcview" end
   return "dashboard"
 end
 
@@ -5022,7 +5059,7 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
   -- fcview: rebuilt when its page or the FC reply changes
   local sub, parsed = nil, nil
   if screen == "fcview" then
-    local page = FC_PAGES[wgt.infoView]
+    local page = FC.pages[wgt.infoView]
     local buf = wgt.fc and wgt.fc[page.cmd]
     if buf then
       if wgt.fcParsedBuf ~= buf then

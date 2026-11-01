@@ -163,6 +163,8 @@ EdgeTX の lvgl ウィジェットとして描く (`CONFIG.lvgl = true`)。各�
 - 根拠 (ソース確認): [docs/rotorflight_notes.md](docs/rotorflight_notes.md)。**実機の FC では未検証**
 
 ## アラーム (音声 + 振動)
+- **効果音** (playTone): 接続 (上がる2音) / 切断 (下がる2音) / 注意 (2回) / 危険 (高い3連) を音声の前に鳴らす。
+  Settings > Voice > Sound effects で On/Off と試聴 (Test)。Mute スイッチで音声と一緒に消える。音の高さ・長さは CONFIG.alarm.toneEffects
 
 `main.lua` の ALARMS と `CONFIG.alarm`。画面に出ていない間も `background()` から判定する。
 
