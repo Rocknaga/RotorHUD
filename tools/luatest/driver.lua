@@ -1,5 +1,7 @@
 -- EdgeTX API stubs + scenario driver for RFTelem (CONFIG.simulate = true).
--- ARGS: "mute" -> Mute source active 30..60s, "bg" -> background() only 40..60s,
+-- ARGS: "full" -> widget full screen (lvgl buttons built), "ui" -> full + taps
+--       through Menu / Settings / FC pages / flight-log Close (see UI below),
+--       "mute" -> Mute source active 30..60s, "bg" -> background() only 40..60s,
 --       "draw" -> report out-of-screen draw calls, "voiceN" -> Voice option N,
 --       "droplink" / "lowbatt" / "native" / "armdthr" / "fallback" -> scenario patches.
 NOW = 0
@@ -65,6 +67,18 @@ if opts.cpu then
   lcd.sizeText = function(text, flags) return #text * 12, 27 end
 end
 Bitmap = { open = function() return nil end }
+LCD_W, LCD_H = 800, 480
+LVSTUB = assert(load(FILES["/luatest/lvglstub.lua"], "lvglstub"))()
+lvgl = LVSTUB.lvgl
+LVSTUB.full = opts.full or opts.ui or false
+local tones = 0
+playTone = function() tones = tones + 1 end
+-- loadScript: the widget folder's files (with the patches below applied)
+loadScript = function(path)
+  local s = FILES[path]
+  if not s then return nil end
+  return assert(load(s, path))
+end
 getTime = function() return NOW end
 local muteVal = 0
 getValue = function(src)
@@ -93,11 +107,19 @@ playFile = function(p) print("PLAY " .. p) end
 local haptics = 0
 playHaptic = function(d, p) haptics = haptics + 1 end
 
-local src = MAIN_SRC:gsub("simulate = false,", "simulate = true,", 1)
+-- patches go to whichever widget file holds the text (main.lua included)
+local MAIN_PATH = "/WIDGETS/RFTelem/main.lua"
+FILES[MAIN_PATH] = MAIN_SRC
 local function patch(from, to)
-  local n; src, n = src:gsub(from, to, 1)
-  assert(n == 1, "patch failed: " .. from)
+  for path, s in pairs(FILES) do
+    if path:sub(1, 9) == "/WIDGETS/" then
+      local out, n = s:gsub(from, to, 1)
+      if n == 1 then FILES[path] = out; return end
+    end
+  end
+  error("patch failed: " .. from)
 end
+patch("simulate = false,", "simulate = true,")
 if opts.droplink then patch("if s < 5 or s >= 75 then", "if s < 5 or s >= 60 then") end
 if opts.lowbatt then patch("t%.charge   = lerp%(99, 25, f%)", "t.charge   = lerp(99, 5, f)") end
 if opts.native then patch("nativeBackup = false,", "nativeBackup = true,") end
@@ -122,7 +144,7 @@ crossfireTelemetryPush = function(cmd, data)
   return true
 end
 
-local chunk = assert(load(src, "main.lua"))
+local chunk = assert(load(FILES[MAIN_PATH], "main.lua"))
 local widget = chunk()
 -- "voiceN" -> Voice option N (alarm voice set)
 -- "landNN" -> BattLand option NN (landing alarm %)
@@ -148,6 +170,24 @@ wgtRef = wgt
 local instr, maxInstr, lastInstr = 0, {}, {}
 debug.sethook(function() instr = instr + 100 end, "", 100)
 
+-- "ui": taps (full screen) at fixed times; each must find its button
+local UI_STEPS = {
+  { 100, "Menu" }, { 120, "Settings" }, { 140, "Alarms" }, { 150, "+" }, { 160, "Display" },
+  { 170, "Mono" }, { 180, "Color" }, { 190, "Voice" }, { 200, "Close" },
+  { 7320, "Menu" }, { 7340, "View FC settings" }, { 7360, "Next" }, { 7380, "Next" }, { 7400, "Close" },
+  { 7700, "Close" },
+}
+local uiDone = {}
+function UI(now)
+  for i, s in ipairs(UI_STEPS) do
+    if not uiDone[i] and now >= s[1] then
+      uiDone[i] = true
+      local ok = LVSTUB.press(s[2])
+      print(string.format("TAP %-18s %s  (screen %s)", s[2], ok and "ok" or "NOT FOUND", tostring(wgt.lastScreenType)))
+    end
+  end
+end
+
 local screens = {}
 for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
   NOW = step * 5
@@ -165,6 +205,8 @@ for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
   else
     instr = 0
     widget.refresh(wgt, 0, nil)
+    LVSTUB.frame()
+    if opts.ui then UI(NOW) end
     local st = wgt.lastScreenType or "?"
     if instr > (maxInstr[st] or 0) then maxInstr[st] = instr end
     lastInstr[st] = instr
@@ -175,7 +217,8 @@ for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
   end
 end
 debug.sethook()
-oprint(string.format("haptic pulses: %d, draw calls: %d", haptics, draws))
+oprint(string.format("haptic pulses: %d, tones: %d, draw calls: %d, lvgl builds: %d", haptics, tones, draws, LVSTUB.builds))
+for _, s in ipairs(LVSTUB.issues) do oprint("LVGL " .. s) end
 -- Includes the stubs' own Lua (real lcd.* calls are C), so read these as
 -- relative numbers between versions, not as the radio's real count.
 for st, n in pairs(maxInstr) do
