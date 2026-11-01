@@ -80,6 +80,16 @@ main.lua の `ARMD_REASONS` / `decodeArmd` がこの表。ARM 警告画面に理
 - テレメトリ: `BATTERY_PROFILE` 0x1214 (U8、番号 + 1)。EdgeTX 上の名前は **`BAT#`**
   (rotorflight-lua-scripts `src/SCRIPTS/RF2/rf2tlm_sensors.lua` 97 番。Gov / Hspd / ARMD など他の名前もこの表と一致)
 
+## 容量を MSP で読めるか (結論: ウィジェットからは確実に読めない)
+
+- FC 側は可能: `MSP_BATTERY_CONFIG` (32) の応答に 6 プロファイル分の容量 (`msp.c` 905-906、
+  rotorflight-lua-scripts `MSP/mspBatteryConfig.lua` も同形式で読む。API 12.09 以降)
+- 受信が問題: rf2bg (`background.lua`) の rf2tlm (`rf2tlm.lua` crossfirePopAll) が初期化後は毎サイクル
+  `crossfireTelemetryPop` でキューを空になるまで読み、0x88 以外 (MSP 応答 0x7B 含む) を捨てる。
+  キューは全スクリプト共通なので、ウィジェットが応答を受け取れるかは順番次第。ウィジェットが先に読むと
+  逆にテレメトリフレームを奪いセンサー更新が欠ける。公式ツールの MSP 読み出しは rf2bg 初期化中のみ
+- そのため容量は `CONFIG.batteryProfile.labels` に手で書く運用 (Battery バーと選択画面に表示)
+
 ## MSP を CRSF で送る方法
 
 出典: rotorflight-lua-scripts `src/SCRIPTS/RF2/MSP/crsf.lua` と `common.lua` (2026-09-30 の master)、

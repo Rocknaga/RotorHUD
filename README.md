@@ -73,6 +73,9 @@ EdgeTX 2.12 の **App mode** レイアウトを使うと、Enter 長押しだけ
   (「バッテリープロファイル、N」)。2 秒ごとに再送、3 回で失敗 (「変更できませんでした」)
 - FC は RAM にだけ保持する (保存しない) ので、電源を入れるたびに選ぶ前提
 - タイルの名前は `CONFIG.batteryProfile.labels` で変えられる (例 "6S 5000")。無効化は `enabled = false`
+- 飛行中のダッシュボードでは Battery バーのラベルに現在のプロファイルを表示 (「Battery #2」、
+  labels を設定していれば「Battery #2 6S 5000」)。容量は MSP からは読めないため labels に手で書く
+  ([docs/rotorflight_notes.md](docs/rotorflight_notes.md))
 - 根拠 (ソース確認): [docs/rotorflight_notes.md](docs/rotorflight_notes.md)。**実機の FC では未検証**
 
 ## アラーム (音声 + 振動)

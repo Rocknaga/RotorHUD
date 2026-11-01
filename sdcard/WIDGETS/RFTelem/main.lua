@@ -2309,9 +2309,18 @@ local function drawLarge(wgt, t, w, h)
   else
     battRight = "--"
   end
+  -- The FC's active battery profile (BAT#) rides on the bar label:
+  -- "Battery #2", plus its CONFIG label when one was set ("#2 6S 5000").
+  -- drawStatBar's fitFont steps the font down if that gets long.
+  local battLabel = "Battery"
+  if t.battProfile then
+    battLabel = "Battery #" .. t.battProfile
+    local custom = CONFIG.batteryProfile.labels[t.battProfile]
+    if custom and custom ~= "Profile " .. t.battProfile then battLabel = battLabel .. " " .. custom end
+  end
   drawChamferedRect(pad, row3Y, w - pad * 2, row3H, COLOR.panel, COLOR.bg, 8)
   drawStatBar(pad + 12, row3Y + 10, w - pad * 2 - 24, row3H - 18,
-    "Battery", battRight, t.charge or 0, getChargeColor(t.charge), batteryLabelIconFn, true, COLOR.white, DBLSIZE)
+    battLabel, battRight, t.charge or 0, getChargeColor(t.charge), batteryLabelIconFn, true, COLOR.white, DBLSIZE)
 
   -- Row 4: footer - Throttle (left, wide) + model picture/name card
   -- (right). lcd.drawBitmap is confirmed (via the diagnostic widget)
