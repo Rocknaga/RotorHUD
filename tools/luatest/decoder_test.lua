@@ -70,6 +70,8 @@ crossfireTelemetryPush = function(cmd, data)
   pushed[#pushed + 1] = { cmd, data }
   if cmd == 0x7C and data[5] == 32 then
     for _, f in ipairs(mspReplyFrames(32, batteryConfigReply())) do queue[#queue + 1] = f end
+  elseif cmd == 0x7C and data[5] == 1 then -- MSP_API_VERSION: protocol 0, API 12.09
+    for _, f in ipairs(mspReplyFrames(1, { 0, 12, 9 })) do queue[#queue + 1] = f end
   end
   return true
 end
@@ -124,7 +126,9 @@ check("EscC", getValue("EscC"), 1234)
 check("Tesc", getValue("Tesc"), 61)
 check("Vbec", getValue("Vbec"), 8.21)
 check("*Cnt frames", getValue("*Cnt"), 3)
-local req = pushed[1]
-check("MSP request frame", req and table.concat(req[2], ","), "200,234,48,0,32,32")
+check("MSP API version request", pushed[1] and table.concat(pushed[1][2], ","), "200,234,48,0,1,1")
+check("API version", wgt.fcApi and math.floor(wgt.fcApi * 100 + 0.5), 1209)
+local req = pushed[2]
+check("MSP request frame", req and table.concat(req[2], ","), "200,234,49,0,32,32")
 for i = 1, 6 do check("capacity " .. i, wgt.battCaps and wgt.battCaps[i], CAPS[i]) end
 print(fails == 0 and "ALL OK" or (fails .. " FAILED"))

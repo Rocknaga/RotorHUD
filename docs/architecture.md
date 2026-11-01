@@ -92,8 +92,12 @@
   ui_lcd.lua の状態遷移・MSP・保存はそのまま。各モジュールは描画しながら `RF2UI.hits` にタップ領域
   `{x, y, w, h, fn, ev}` を積み、`refresh` が次のフレームで `rf2SkinInput` によりタップを照合して fn を実行し、
   ev (ENTER / EXIT / ENTER_LONG / PAGE) を ui_lcd に渡す。後に積んだもの (ポップアップ・タイトル帯) が優先。
-  ページの配置は RF2 の 800×480 テンプレートの座標を、タイトル帯 (60px) の下へずらしたもの (`Page.skinDy`)。
-  表の枠幅は同じ行の次の項目まで (`Page.skinW`)。ポップアップは `RF2UI.backdrop` (直前の画面) の上に描く
+  ページは `rf2CardModel` が RF2 の labels/fields を y 座標で行にまとめてカードに組み直す: 単独ラベル = 見出し (新カード)、
+  見出しより右の単独ラベル = 表示専用の値、ラベル 2 個以上の行 = 表の列見出し、その後の「行見出し + 無名フィールド」 = 表の行、
+  それ以外 = タイル (3 列)。モデルは Page.fields が入れ替わったら作り直す。編集パネル (y 296〜) はスライダー
+  (`RF2UI.slider`、ドラッグは touchState.startY で判定) と ±、選択肢 6 個以下はボタン。
+  `wgt.fcApi` (rfMspUpdate が MSP_API_VERSION で先に取得) があれば `ui_init` を差し替えて API 待ちを省く。
+  ホスト側は RF2 の実行後に `rf2.mspQueue:processQueue()` をもう 1 回呼ぶ。ポップアップは `RF2UI.backdrop` (直前の画面) の上に描く
   (ウィジェットは毎フレーム全描画のため)
 - `stopTool`: `wgt.hosted`・`wgt.menu` と RF2 の唯一のグローバル `rf2` を消して GC。エラーは `wgt.toolMsg` で 3 秒表示
   (シミュレータでは /LOGS/rftelem_alarms.log にも)
