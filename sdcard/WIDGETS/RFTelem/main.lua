@@ -4416,13 +4416,16 @@ function LV.topBar(k, wgt, w, withMenu)
   local x = LV.ICON + 4
   local cy = math.floor(y + h / 2)
   LV.rect(k, x, y, w - pad - x, h, COLOR.chip, 8)
-  local bw, bh = 50, 26
-  local bx = w - pad - 16 - bw - 5
+  -- TX battery: fill level over a light ground, percentage inside in dark text
+  local bw, bh = 64, 30
+  local bx = w - pad - 14 - bw - 5
   LV.rect(k, bx, cy - bh / 2, bw, bh, COLOR.dim, 4, { filled = false, thickness = 2 })
-  LV.rect(k, bx + bw, cy - 6, 5, 12, COLOR.dim)
+  LV.rect(k, bx + bw, cy - 7, 5, 14, COLOR.dim)
+  LV.rect(k, bx + 4, cy - bh / 2 + 4, bw - 8, bh - 8, COLOR.dim, 2) -- light ground: dark text reads on it
   LV.rect(k, bx + 4, cy - bh / 2 + 4, bw - 8, bh - 8, COLOR.green, 2, {
     color = LV.dv("txColor", COLOR.green),
     size = function() return math.max(1, math.floor((bw - 8) * (LV.v.txPct or 0) / 100)), bh - 8 end })
+  LV.text(k, bx, cy, bw, LV.dv("txPctShort", ""), SMLSIZE, COLOR.black, CENTER)
   local sx = bx - 18 - 33
   for i = 1, 4 do
     local barH = 7 * i
@@ -4508,46 +4511,31 @@ function LV.buildDashboard(k, wgt, w, h)
 end
 
 function LV.buildStandby(k, wgt, w, h)
-  local pad, y = 12, 12
+  -- top bar like the other screens; big clock | model card; a status strip
+  LV.topBar(k, wgt, w, true)
+  local pad, y = 12, LV.Y1
   local panelW = w - pad * 2
-  local heroH = (h - pad) - y - (pad + 56 + pad + 62)
-  local hx = LV.ICON + 4 -- the hero panel starts right of the EdgeTX button
-  local heroW = w - pad - hx
-  LV.rect(k, hx, y, heroW, heroH, COLOR.accentBorder, 8)
-  LV.rect(k, hx + 1, y + 1, heroW - 2, heroH - 2, COLOR.accentPanel, 7)
-  local half = math.floor(heroW / 2)
-  LV.text(k, hx, y + heroH / 2 - 10, half, LV.dv("hhmm", ""), XXLSIZE, COLOR.white, CENTER)
-  LV.text(k, hx, y + heroH - 34, half, LV.dv("date", ""), SMLSIZE, COLOR.dim, CENTER)
-  LV.rect(k, hx + half, y + 24, 1, heroH - 48, COLOR.muted)
+  local sh = 56
+  local sy = h - pad - sh
+  local heroH = sy - pad - y
+  LV.rect(k, pad, y, panelW, heroH, COLOR.accentBorder, 8)
+  LV.rect(k, pad + 1, y + 1, panelW - 2, heroH - 2, COLOR.accentPanel, 7)
+  local half = math.floor(panelW / 2)
+  LV.text(k, pad, y + heroH / 2 - 10, half, LV.dv("hhmm", ""), XXLSIZE, COLOR.white, CENTER)
+  LV.text(k, pad, y + heroH - 34, half, LV.dv("date", ""), SMLSIZE, COLOR.dim, CENTER)
+  LV.rect(k, pad + half, y + 24, 1, heroH - 48, COLOR.muted)
   local imgY = y + math.floor(heroH * 0.22)
   if CONFIG.showModelImage and wgt.modelImagePath then
-    k[#k + 1] = { type = "image", file = wgt.modelImagePath, x = hx + half + math.floor((half - CONFIG.modelImageW) / 2),
+    k[#k + 1] = { type = "image", file = wgt.modelImagePath, x = pad + half + math.floor((half - CONFIG.modelImageW) / 2),
       y = imgY, w = CONFIG.modelImageW, h = CONFIG.modelImageH }
   end
-  LV.text(k, hx + half + 20, imgY + CONFIG.modelImageH + 48, half - 40, LV.dv("model", ""), DBLSIZE, COLOR.white, CENTER)
-  LV.text(k, hx + half, y + heroH - 34, half, "Model", SMLSIZE, COLOR.dim, CENTER)
+  LV.text(k, pad + half + 20, imgY + CONFIG.modelImageH + 48, half - 40, LV.dv("model", ""), DBLSIZE, COLOR.white, CENTER)
+  LV.text(k, pad + half, y + heroH - 34, half, "Model", SMLSIZE, COLOR.dim, CENTER)
 
-  local sy, sh = y + heroH + pad, 56
   LV.rect(k, pad, sy, panelW, sh, COLOR.panel, 6)
   LV.text(k, pad + 16, sy + sh / 2, panelW / 2, "Waiting for connection", MIDSIZE, COLOR.white)
-  LV.text(k, pad + panelW / 2, sy + sh / 2, panelW / 2 - 16, LV.dv("standbyHint", ""), SMLSIZE, COLOR.dim, RIGHT)
-  -- full screen only (a button): covers the hint, which then isn't needed
-  LV.rect(k, pad + panelW - 130, sy + 6, 126, sh - 12, COLOR.panel, nil, { visible = function() return LV.v.full end })
-  LV.button(k, pad + panelW - 120, sy + 10, 104, sh - 20, "Menu", function() wgt.menu = { sel = 1 } end, 0)
-
-  local ty, tabH = sy + sh + pad, 62
-  LV.rect(k, pad, ty, panelW, tabH, COLOR.panel, 6)
-  local fracs = { 0.26, 0.30, 0.22 }
-  local tabs = { { "TX battery", "txV", "txPctText", "txColor" }, { "Last flight", "lastFlight", "lastUsed" },
-                 { "Voice", "voice" }, { "Alarms", "alarms", nil, "alarmsColor" } }
-  local tx = pad
-  for i = 1, 4 do
-    local tb = tabs[i]
-    local tw = fracs[i] and math.floor(panelW * fracs[i]) or (pad + panelW - tx)
-    if i == 2 or i == 3 then LV.rect(k, tx, ty + 10, 1, tabH - 20, COLOR.muted) end
-    LV.tab(k, tx + 2, ty + 1, tw - 4, tabH - 2, tb[1], tb[2], tb[3], tb[4])
-    tx = tx + tw
-  end
+  LV.text(k, pad + panelW / 2, sy + sh / 2, panelW / 2 - 16, LV.dv("standbyHint", ""), SMLSIZE, COLOR.dim, RIGHT,
+    { visible = function() return not LV.v.full end })
 end
 
 function LV.buildArmWarning(k, wgt, w, h, armd)
@@ -4949,7 +4937,10 @@ function LV.update(wgt, t, screen, connected, armed)
     v.rpm, v.volt = fmt(t.rpm, 0), fmtUnit(t.voltage, 1, "v")
     return
   end
+  v.txPctShort = txPct and (fmt(txPct, 0) .. "%") or "--"
+  v.clock = dt and string.format("%04d/%02d/%02d %02d:%02d", dt.year, dt.mon, dt.day, dt.hour, dt.min) or ""
   if screen == "standby" then
+    v.sig, v.warn = 0, ""
     v.hhmm = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
     v.date = dt and string.format("%04d/%02d/%02d", dt.year, dt.mon, dt.day) or ""
     v.standbyHint = touchHint() or "Power on the model"
