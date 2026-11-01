@@ -196,10 +196,10 @@ local CONFIG = {
   -- Official tools hosted full-screen inside the widget (see TOOLS HOST):
   -- Rotorflight's own Lua (installed under /SCRIPTS/RF2/, lcd UI) and the
   -- ExpressLRS Lua tool - the first ELRS path that exists is used.
+  perfOverlay = true, -- fps / ms per frame / Lua KB, bottom-right (speed check on the radio)
   tools = {
     rf2Dir = "/SCRIPTS/RF2/",
     rf2Skin = true, -- RF2 drawn in this widget's theme with touch (false = RF2's plain lcd look)
-    rf2Fps = true,  -- frame rate in the corner while RF2 runs (speed check on the radio)
     elrs   = { "/SCRIPTS/TOOLS/elrs.lua", "/SCRIPTS/TOOLS/elrsV3.lua",
                "/SCRIPTS/TOOLS/ExpressLRS.lua", "/SCRIPTS/TOOLS/ELRS.lua" },
   },
@@ -3189,11 +3189,16 @@ end
 
 local RF2_TOP = 60          -- content starts below the 56px title bar
 local RF2_ROW = 30          -- RF2's 800x480 line spacing
-local RF2UI = { hits = {} }
+local RF2UI = { hits = {}, nHits = 0, fonts = {}, nFonts = 0 }
 
-local function rf2Hit(x, y, w, h, fn, ev)
-  local hits = RF2UI.hits
-  hits[#hits + 1] = { x, y, w, h, fn, ev }
+-- Tap targets live in a pool reused every frame (no per-frame tables or
+-- closures: the radio's Lua heap is small and GC work costs frame time).
+local function rf2Hit(x, y, w, h, fn, ev, arg)
+  local n = RF2UI.nHits + 1
+  RF2UI.nHits = n
+  local hit = RF2UI.hits[n]
+  if not hit then hit = {}; RF2UI.hits[n] = hit end
+  hit[1], hit[2], hit[3], hit[4], hit[5], hit[6], hit[7] = x, y, w, h, fn, ev, arg
 end
 
 -- MIDSIZE when every text fits the width, else the default font for all
@@ -3205,12 +3210,14 @@ local function rf2Font(w, texts)
   return MIDSIZE
 end
 
-local function rf2Button(x, y, w, h, label, bg, fn, ev, active, font)
+local function rf2Button(x, y, w, h, label, bg, fn, ev, active, font, arg)
   drawChamferedRect(x, y, w, h, active and COLOR.accentPanel or COLOR.barBg, bg, 5)
   if active then lcd.drawFilledRectangle(x + 8, y + h - 5, w - 16, 3, COLOR.accent) end
   lcd.drawText(x + w / 2, y + h / 2, label, CENTER + VCENTER + (font or 0) + COLOR.white)
-  rf2Hit(x, y, w, h, fn, ev)
+  rf2Hit(x, y, w, h, fn, ev, arg)
 end
+
+local function rf2Quit() RF2UI.quit = true end
 
 -- Background + title bar: Back (EXIT), title, page arrows, Menu (the
 -- Save / Reload / Reboot / Acc Cal popup that ENTER-long opens).
@@ -3218,7 +3225,7 @@ local function rf2Frame(title, kind, keepBg)
   if not keepBg then lcd.drawFilledRectangle(0, 0, LCD_W, LCD_H, COLOR.bg) end
   lcd.drawFilledRectangle(0, 0, LCD_W, RF2_TOP - 4, COLOR.panel)
   lcd.drawFilledRectangle(0, RF2_TOP - 5, LCD_W, 1, COLOR.accentBorder)
-  local quit = (kind == "init") and function() RF2UI.quit = true end or nil
+  local quit = (kind == "init") and rf2Quit or nil
   rf2Button(8, 6, 104, 44, "< Back", COLOR.panel, quit, EVT_VIRTUAL_EXIT)
   local right = LCD_W - 8
   if kind ~= "init" and EVT_VIRTUAL_ENTER_LONG then
@@ -3338,6 +3345,14 @@ local function rf2SkinMainMenu(shared, pageFiles, selected)
   local titles = {}
   for i = 1, #pageFiles do titles[i] = pageFiles[i].title end
   local font = rf2Font(TW - 28, titles)
+  local function selectPage(i) selected = i end
+  local slide = function(ts)
+    local dy = ts.slideY or 0
+    local maxFirst = math.max(0, math.ceil(#pageFiles / COLS) - rowsShown)
+    firstRow = math.max(0, math.min(maxFirst, firstRow - math.floor(dy / (TH + GAP) + 0.5)))
+    selected = math.max(selected, firstRow * COLS + 1)
+    selected = math.min(selected, (firstRow + rowsShown) * COLS, #pageFiles)
+  end
   local function draw()
     rf2Frame("Rotorflight " .. rf2.luaVersion, "main")
     local selRow = math.floor((selected - 1) / COLS)
@@ -3353,17 +3368,11 @@ local function rf2SkinMainMenu(shared, pageFiles, selected)
         if sel then lcd.drawFilledRectangle(x, y + 6, 4, TH - 12, COLOR.accent) end
         local title = pageFiles[i].title
         lcd.drawText(x + 16, y + TH / 2, title, LEFT + VCENTER + font + COLOR.white)
-        rf2Hit(x, y, TW, TH, function() selected = i end, EVT_VIRTUAL_ENTER)
+        rf2Hit(x, y, TW, TH, selectPage, EVT_VIRTUAL_ENTER, i)
       end
     end
     RF2UI.backdrop = draw
-    RF2UI.slide = function(ts)
-      local dy = ts.slideY or 0
-      local maxFirst = math.max(0, math.ceil(#pageFiles / COLS) - rowsShown)
-      firstRow = math.max(0, math.min(maxFirst, firstRow - math.floor(dy / (TH + GAP) + 0.5)))
-      selected = math.max(selected, firstRow * COLS + 1)
-      selected = math.min(selected, (firstRow + rowsShown) * COLS, #pageFiles)
-    end
+    RF2UI.slide = slide
   end
   t.update = function(event)
     draw()
@@ -3547,6 +3556,8 @@ local function rf2SkinPage(shared, Page)
   end
 
   -- what a tile/cell is called: its own text, else from the card model
+  local function selectField(i) current = i end
+
   local function nameOf(i)
     local f = Page.fields[i]
     if f.t and not isButton(f) then return f.t end
@@ -3554,9 +3565,15 @@ local function rf2SkinPage(shared, Page)
   end
 
   local function valueFont(text, w)
-    if textWidth(text, MIDSIZE) <= w then return MIDSIZE end
-    if textWidth(text, 0) <= w then return 0 end
-    return SMLSIZE
+    local key = text .. "|" .. w
+    local f = RF2UI.fonts[key]
+    if f then return f end
+    if textWidth(text, MIDSIZE) <= w then f = MIDSIZE
+    elseif textWidth(text, 0) <= w then f = 0
+    else f = SMLSIZE end
+    if RF2UI.nFonts > 300 then RF2UI.fonts, RF2UI.nFonts = {}, 0 end
+    RF2UI.fonts[key], RF2UI.nFonts = f, RF2UI.nFonts + 1
+    return f
   end
 
   local function drawTile(i, x, y, w, h, editing)
@@ -3587,6 +3604,11 @@ local function rf2SkinPage(shared, Page)
     setValue(lo + frac * (hi - lo))
   end
 
+  local CHOICE_STEPS = { { "<", -1 }, { ">", 1 } }
+  local NUMBER_STEPS = { { "-10", -10 }, { "-1", -1 }, { "+1", 1 }, { "+10", 10 } }
+  local slider = { 0, 0, setFromX }
+  local function tapSlider() setFromX(RF2UI.tapX or SL_X) end
+
   local function drawPanel()
     local f = Page.fields[current]
     local y = RF2_PANEL_Y
@@ -3607,8 +3629,8 @@ local function rf2SkinPage(shared, Page)
         local bx = 10 + (k % 3) * (bw + 8)
         local by = y + 62 + math.floor(k / 3) * 58
         local label = tostring(choices[v] or v)
-        rf2Button(bx, by, bw, 50, label, COLOR.panel, function() setValue(v) end, nil, d.value == v,
-          valueFont(label, bw - 12))
+        rf2Button(bx, by, bw, 50, label, COLOR.panel, setValue, nil, d.value == v,
+          valueFont(label, bw - 12), v)
       end
     else
       if not choices then
@@ -3625,16 +3647,28 @@ local function rf2SkinPage(shared, Page)
         local fw = math.floor(SL_W * math.max(0, math.min(1, frac)))
         lcd.drawFilledRectangle(SL_X, sy, fw, 40, COLOR.accentPanel)
         lcd.drawFilledRectangle(SL_X + math.max(0, fw - 4), sy - 4, 8, 48, COLOR.accent)
-        rf2Hit(SL_X - 10, sy - 10, SL_W + 20, 60, function() setFromX(RF2UI.tapX or SL_X) end)
-        RF2UI.slider = { sy - 10, sy + 50, setFromX }
+        rf2Hit(SL_X - 10, sy - 10, SL_W + 20, 60, tapSlider)
+        slider[1], slider[2] = sy - 10, sy + 50
+        RF2UI.slider = slider
       end
       local by = y + 118
-      local steps = choices and { { "<", -1 }, { ">", 1 } } or { { "-10", -10 }, { "-1", -1 }, { "+1", 1 }, { "+10", 10 } }
+      local steps = choices and CHOICE_STEPS or NUMBER_STEPS
       for k, s in ipairs(steps) do
-        rf2Button(10 + (k - 1) * 128, by, 120, 56, s[1], COLOR.panel, function() incValue(s[2]) end, nil, false, MIDSIZE)
+        rf2Button(10 + (k - 1) * 128, by, 120, 56, s[1], COLOR.panel, incValue, nil, false, MIDSIZE, s[2])
       end
     end
     rf2Button(LCD_W - 116, y + 118, 106, 56, "OK", COLOR.panel, nil, EVT_VIRTUAL_ENTER, true, MIDSIZE)
+  end
+
+  local lastState
+  local function backdrop() t.draw(lastState) end
+  local function slide(ts)
+    local s = RF2UI.slider
+    if s and ts.startY and ts.startY >= s[1] and ts.startY <= s[2] then
+      s[3](ts.x)
+    else
+      scrollY = scrollY - (ts.slideY or 0)
+    end
   end
 
   t.draw = function(pageState)
@@ -3696,7 +3730,7 @@ local function rf2SkinPage(shared, Page)
             drawTile(i, q[1], y, q[3], q[4], editing)
             if not editing then
               local editable = Page.isReady and not fields[i].readOnly
-              rf2Hit(q[1], y, q[3], q[4], function() current = i end, editable and EVT_VIRTUAL_ENTER or nil)
+              rf2Hit(q[1], y, q[3], q[4], selectField, editable and EVT_VIRTUAL_ENTER or nil, i)
             end
           end
         end
@@ -3711,15 +3745,8 @@ local function rf2SkinPage(shared, Page)
       local x = (getTime() * 8) % (LCD_W + 160) - 160
       lcd.drawFilledRectangle(math.max(0, x), RF2_TOP - 5, 160 + math.min(0, x), 3, COLOR.accent)
     end
-    RF2UI.backdrop = function() t.draw(pageState) end
-    RF2UI.slide = function(ts)
-      local s = RF2UI.slider
-      if s and ts.startY and ts.startY >= s[1] and ts.startY <= s[2] then
-        s[3](ts.x)
-      else
-        scrollY = scrollY - (ts.slideY or 0)
-      end
-    end
+    lastState = pageState
+    RF2UI.backdrop, RF2UI.slide = backdrop, slide
   end
 
   t.update = function(pageState, event)
@@ -3783,7 +3810,7 @@ local function rf2SkinInstall(apiVersion)
   RF2UI.apiVersion = apiVersion
   rf2.radio.yMinLimit = RF2_TOP + 8 -- init screen text below the title bar
   rf2.radio.NoTelem = { LCD_W / 2, LCD_H - 16, "No telemetry", CENTER + VCENTER + SMLSIZE + COLOR.red }
-  RF2UI.hits, RF2UI.backdrop, RF2UI.slide, RF2UI.quit = {}, nil, nil, nil
+  RF2UI.hits, RF2UI.nHits, RF2UI.backdrop, RF2UI.slide, RF2UI.quit = {}, 0, nil, nil, nil
 end
 
 -- Touch -> RF2: taps hit the targets drawn last frame (topmost first),
@@ -3800,11 +3827,11 @@ local function rf2SkinInput(event, touchState)
   if not touchState then return 0 end
   local hits = RF2UI.hits
   RF2UI.tapX = touchState.x
-  for i = #hits, 1, -1 do
+  for i = RF2UI.nHits, 1, -1 do
     local h = hits[i]
     if touchState.x >= h[1] and touchState.x < h[1] + h[3]
        and touchState.y >= h[2] and touchState.y < h[2] + h[4] then
-      if h[5] then h[5]() end
+      if h[5] then h[5](h[7]) end
       return h[6] or 0
     end
   end
@@ -3922,6 +3949,28 @@ local function drawToolMsg(wgt, w, h)
   lcd.drawText(w / 2, h - 42, m.text, CENTER + VCENTER + fitFontMeasured(w - 100, 27, m.text, SMLSIZE) + COLOR.white)
 end
 
+-- Frame timing (CONFIG.perfOverlay), bottom-right: fps, ms per frame in
+-- tick() and in drawing / the hosted tool, Lua heap in KB. getTime() is
+-- 10ms, so the times are averages over 20 frames.
+local function perfOverlay(wgt, t0, t1)
+  if not CONFIG.perfOverlay then return end
+  local p = wgt.perf
+  if not p then p = { n = 0, tick = 0, ui = 0, frame = 0 }; wgt.perf = p end
+  local now = getTime()
+  if p.last then p.frame = p.frame + (t0 - p.last) end
+  p.last = t0
+  p.n, p.tick, p.ui = p.n + 1, p.tick + (t1 - t0), p.ui + (now - t1)
+  if p.n >= 20 then
+    local fps10 = math.floor(p.n * 1000 / math.max(p.frame, 1))
+    local ok, kb = pcall(collectgarbage, "count")
+    if not ok or type(kb) ~= "number" then kb = 0 end
+    p.text = string.format("%d.%d fps  tick %d  ui %d ms  %dk", math.floor(fps10 / 10), fps10 % 10,
+      math.floor(p.tick * 10 / p.n), math.floor(p.ui * 10 / p.n), math.floor(kb))
+    p.n, p.tick, p.ui, p.frame = 0, 0, 0, 0
+  end
+  if p.text then lcd.drawText(wgt.zone.w - 4, wgt.zone.h - 10, p.text, RIGHT + VCENTER + SMLSIZE + COLOR.dim) end
+end
+
 local function refresh(wgt, event, touchState)
   -- Apply the radio-side "Theme" widget option (0/1/2), if set -
   -- reassigning the COLOR upvalue here means every helper function
@@ -3937,7 +3986,19 @@ local function refresh(wgt, event, touchState)
     end
   end
 
-  local t, connected = tick(wgt)
+  local t0 = getTime()
+  local t, connected
+  if wgt.hosted and wgt.lastTickT and (wgt.tickSkip or 0) < 4 then
+    -- a hosted tool needs the frame time: the trackers/alarms run every
+    -- 5th frame (the custom sensors are paused anyway, see rfTelemetryPump)
+    wgt.tickSkip = (wgt.tickSkip or 0) + 1
+    t, connected = wgt.lastTickT, wgt.lastTickC
+  else
+    wgt.tickSkip = 0
+    t, connected = tick(wgt)
+    wgt.lastTickT, wgt.lastTickC = t, connected
+  end
+  local t1 = getTime()
   ensureModelImage(wgt)
   ensureTxBatteryIcons(wgt)
   local armed = t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1
@@ -3960,7 +4021,7 @@ local function refresh(wgt, event, touchState)
       local skinned = wgt.hosted.kind == "rf2" and rf2 and rf2.radio and CONFIG.tools.rf2Skin
       if skinned then
         event = rf2SkinInput(event or 0, touchState)
-        RF2UI.hits = {}
+        RF2UI.nHits = 0
       end
       local ok, ret = pcall(wgt.hosted.run, event or 0, touchState)
       if skinned and RF2UI.quit then ok, ret = true, 2 end
@@ -3969,16 +4030,7 @@ local function refresh(wgt, event, touchState)
         -- next request right after a reply instead of a frame later
         pcall(rf2.mspQueue.processQueue, rf2.mspQueue)
       end
-      if skinned and CONFIG.tools.rf2Fps then -- frame rate, to judge speed on the radio
-        local now = getTime()
-        local dt = now - (RF2UI.lastFrame or now)
-        RF2UI.lastFrame = now
-        if dt > 0 and dt < 100 then RF2UI.avgDt = ((RF2UI.avgDt or dt) * 7 + dt) / 8 end
-        if RF2UI.avgDt then
-          lcd.drawText(LCD_W - 4, LCD_H - 10, string.format("%d fps", math.floor(100 / RF2UI.avgDt + 0.5)),
-            RIGHT + VCENTER + SMLSIZE + COLOR.dim)
-        end
-      end
+      perfOverlay(wgt, t0, t1)
       if not ok then
         stopTool(wgt, "Tool error: " .. tostring(ret))
       elseif ret and ret ~= 0 then
@@ -4072,6 +4124,7 @@ local function refresh(wgt, event, touchState)
     drawLarge(wgt, t, w, h)
     if wgt.menu then drawMenu(wgt, t, connected, w, h) end
     drawToolMsg(wgt, w, h)
+    perfOverlay(wgt, t0, t1)
   end
 end
 
