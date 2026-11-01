@@ -581,6 +581,12 @@ local function decodeArmd(code)
   return list
 end
 
+-- x has no fractional part. Not "x == math.floor(x)": on EdgeTX 2.12
+-- (Lua 5.3) 12.5 == math.floor(12.5) is true (measured in the simulator).
+local function isWhole(x)
+  return string.sub(string.format("%.3f", x), -4) == ".000"
+end
+
 local function fmt(value, decimals)
   if value == nil then return "--" end
   if decimals and decimals > 0 then
@@ -1779,7 +1785,7 @@ local function drawFlightChart(x, y, w, h, defs, durationSec, cache)
   local labelFlag = { RIGHT, LEFT, LEFT }
   for i = 1, #defs do
     local d = defs[i]
-    local decimals = (d.step ~= math.floor(d.step) or d.bottom ~= math.floor(d.bottom)) and 1 or 0
+    local decimals = (isWhole(d.step) and isWhole(d.bottom)) and 0 or 1
     for q = 0, CHART_DIVS do
       lcd.drawText(labelX[i], base - math.floor(q * top / CHART_DIVS), fmt(d.bottom + q * d.step, decimals),
         labelFlag[i] + VCENTER + SMLSIZE + d.color)
@@ -2922,6 +2928,72 @@ local function parseBatteryConfig(buf)
   return caps
 end
 
+-- FC settings pages, read only (LVGL VIEW "fcview", opened by the "Page"
+-- option switch without full screen, or from the menu). Reply layouts and
+-- display scales are rotorflight-lua-scripts' MSP/mspPidTuning.lua,
+-- mspRcTuning.lua + MSP/RATES/*.lua and mspGovernorProfile.lua: a value
+-- shows as raw / scale, whole numbers when scale <= 1.
+local function fcU16(buf, i) return (buf[i] or 0) + (buf[i + 1] or 0) * 256 end
+local function fcScaled(raw, scale)
+  if raw == nil then return "--" end
+  if not scale then return tostring(raw) end
+  local v = raw / scale
+  if scale <= 1 then return tostring(math.floor(v)) end
+  v = math.floor(v * 100 + 0.5) / 100
+  if isWhole(v) then return string.format("%d", math.floor(v)) end
+  return (string.gsub(string.format("%.2f", v), "0$", ""))
+end
+-- rates type -> column headings and scales (rcRates, rates, rcExpo)
+local FC_RATE_TYPES = {
+  [0] = { "NONE",    { "RC Rate", "Rate", "RC Expo" },   { nil, nil, nil },   { nil, nil, nil } },
+  [1] = { "BETAFL",  { "RC Rate", "Rate", "RC Expo" },   { 100, 100, 100 },   { 100, 100, 100 } },
+  [2] = { "RACEFL",  { "Rate", "Acro+", "Expo" },        { 0.1, nil, nil },   { 4, nil, nil } },
+  [3] = { "KISS",    { "RC Rate", "Rate", "RC Curve" },  { 100, 100, 100 },   { 100, 100, 100 } },
+  [4] = { "ACTUAL",  { "Center Sens", "Max Rate", "Expo" }, { 0.1, 0.1, 100 }, { 4, 4, 100 } },
+  [5] = { "QUICK",   { "RC Rate", "Max Rate", "Expo" },  { 100, 0.1, 100 },   { 100, 0.208, 100 } },
+  [6] = { "ROTORFL", { "Rate", "Shape", "Expo" },        { 0.2, 1, 1 },       { 8, 1, 1 } },
+}
+local FC_PAGES = {
+  { cmd = 112, title = "PID gains", -- MSP_PID_TUNING
+    parse = function(b)
+      local cols = { "P", "I", "D", "F", "B", "O" }
+      local function axis(base, bOff, oOff)
+        return { fcU16(b, base), fcU16(b, base + 2), fcU16(b, base + 4), fcU16(b, base + 6),
+                 fcU16(b, bOff), oOff and fcU16(b, oOff) or "-" }
+      end
+      return { kind = "table", cols = cols, sig = "pid",
+        rows = { { "Roll", axis(1, 25, 31) }, { "Pitch", axis(9, 27, 33) }, { "Yaw", axis(17, 29, nil) } } }
+    end },
+  { cmd = 111, title = "Rates", -- MSP_RC_TUNING
+    parse = function(b)
+      local rt = FC_RATE_TYPES[b[1] or 0] or FC_RATE_TYPES[0]
+      local rows, names = {}, { "Roll", "Pitch", "Yaw", "Collective" }
+      for a = 0, 3 do
+        local base, sc = 2 + a * 6, (a == 3) and rt[4] or rt[3]
+        rows[a + 1] = { names[a + 1], { fcScaled(b[base], sc[1]), fcScaled(b[base + 2], sc[2]), fcScaled(b[base + 1], sc[3]) } }
+      end
+      return { kind = "table", cols = rt[2], rows = rows, note = rt[1], sig = "rates" .. rt[1] }
+    end },
+  { cmd = 148, title = "Governor profile", -- MSP_GOVERNOR_PROFILE
+    parse = function(b)
+      local items = {
+        { "Headspeed", fcU16(b, 1) .. " rpm" }, { "Gain", b[3] }, { "P gain", b[4] }, { "I gain", b[5] },
+        { "D gain", b[6] }, { "F gain", b[7] }, { "TTA gain", b[8] }, { "TTA limit", (b[9] or "--") .. "%" },
+        { "Yaw weight", b[10] }, { "Cyclic weight", b[11] }, { "Coll. weight", b[12] },
+        { "Max throttle", (b[13] or "--") .. "%" },
+      }
+      if #b >= 14 then items[#items + 1] = { "Min throttle", b[14] .. "%" } end
+      if #b >= 15 then items[#items + 1] = { "Fallback drop", b[15] .. "%" } end
+      return { kind = "list", items = items, sig = "gov" .. #items }
+    end },
+}
+-- RF2's simulator replies, so CONFIG.simulate shows the pages too
+local FC_SIM_REPLIES = {
+  [112] = { 70, 0, 225, 0, 90, 0, 120, 0, 100, 0, 200, 0, 70, 0, 120, 0, 100, 0, 125, 0, 83, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 25, 0 },
+  [111] = { 6, 50, 40, 12, 0, 0, 0, 50, 40, 12, 0, 0, 0, 80, 50, 12, 0, 0, 0, 100, 0, 12, 0, 0, 0 },
+  [148] = { 0x34, 0x08, 40, 10, 20, 0, 10, 0, 20, 20, 10, 10, 100, 10, 10 },
+}
+
 -- Per connect: ask for the profile capacities (after the connect quiet
 -- time, retried every 1.5s, at most 6 times). Fills wgt.battCaps[1..6].
 -- Also MSP_API_VERSION (1) first, kept in wgt.fcApi so the hosted RF2 tool
@@ -2930,6 +3002,14 @@ local function rfMspUpdate(wgt, connected)
   local cfg, rt = CONFIG.telemetry, wgt.rt
   if CONFIG.simulate or not cfg.decode or not connected or wgt.hosted then return end
   local now = getTime()
+  if wgt.infoView then -- an FC settings page is open: its data first
+    local cmd = FC_PAGES[wgt.infoView].cmd
+    wgt.fc = wgt.fc or {}
+    if not wgt.fc[cmd] and now - (rt.fcAskedAt or -1000) >= 100 then
+      if mspRequest(cmd, {}) then rt.fcAskedAt = now end
+    end
+    return
+  end
   if now < (wgt.alarm.quietUntil or 0) or now - (rt.capAskedAt or -1000) < 150 then return end
   if not wgt.fcApi and rt.capTries < 6 then
     if mspRequest(MSP_API_VERSION, {}) then rt.capAskedAt, rt.capTries = now, rt.capTries + 1 end
@@ -2943,6 +3023,10 @@ local function newRfTelemetryState(wgt)
   local rt = { count = 0, skip = 0, capTries = 0 }
   rt.onReply = function(cmd, buf, isError)
     if cmd == MSP_BATTERY_CONFIG and not isError then wgt.battCaps = parseBatteryConfig(buf) end
+    if (cmd == 112 or cmd == 111 or cmd == 148) and not isError then
+      wgt.fc = wgt.fc or {}
+      wgt.fc[cmd] = buf
+    end
     if cmd == MSP_API_VERSION and not isError and #buf >= 3 then
       wgt.fcApi = buf[2] + buf[3] / 100 + 0.00001 -- as RF2's MSP/mspApiVersion.lua
       rt.capTries = 0
@@ -3157,6 +3241,22 @@ local function tick(wgt)
   local prevOn = sourceActive(wgt.options and wgt.options.BattPrev)
   if prevOn and not wgt.prevWasOn and connected then bpStep(wgt, -1) end
   wgt.prevWasOn = prevOn
+
+  -- "Page" option: FC settings pages (read only), each press the next one,
+  -- then back to the dashboard. Works without full screen. Closed when
+  -- arming or disconnecting; reopening reads the values again.
+  local armedNow = t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1
+  local pageOn = sourceActive(wgt.options and wgt.options.Page)
+  if pageOn and not wgt.pageWasOn and connected and not armedNow then
+    local nextView = (wgt.infoView or 0) + 1
+    wgt.infoView = (nextView <= #FC_PAGES) and nextView or nil
+    if wgt.infoView then
+      wgt.fc = wgt.fc or {}
+      wgt.fc[FC_PAGES[wgt.infoView].cmd] = CONFIG.simulate and FC_SIM_REPLIES[FC_PAGES[wgt.infoView].cmd] or nil
+    end
+  end
+  wgt.pageWasOn = pageOn
+  if armedNow or not connected then wgt.infoView = nil end
   return t, connected
 end
 
@@ -3642,7 +3742,7 @@ local function rf2SkinPage(shared, Page)
         local sc = d.scale or 1
         local function num(v)
           v = v / sc
-          return (v == math.floor(v)) and string.format("%d", v) or tostring(v)
+          return isWhole(v) and string.format("%d", math.floor(v)) or tostring(v)
         end
         lcd.drawText(LCD_W - 20, y + 30, num(lo) .. " ... " .. num(hi), RIGHT + VCENTER + SMLSIZE + COLOR.muted)
         local sy = y + 62
@@ -3916,6 +4016,7 @@ local MENU_ITEMS = {
   { key = "rf2",  label = "Rotorflight settings" },
   { key = "elrs", label = "ExpressLRS" },
   { key = "batt", label = "Battery profile" },
+  { key = "view", label = "View FC settings" },
 }
 
 -- Whether a menu item can be used now, and why not.
@@ -3926,6 +4027,8 @@ local function menuItemState(wgt, t, connected, key)
     return false, "lcd tool - use SYS > Tools"
   elseif key == "elrs" then
     return crossfireTelemetryPush ~= nil and crossfireTelemetryPush() ~= nil, "no CRSF module"
+  elseif key == "view" then
+    return connected and CONFIG.lvgl and lvgl ~= nil, "needs the model connected"
   end
   return connected and t.battProfile ~= nil, "needs BAT# from the FC"
 end
@@ -3936,6 +4039,11 @@ local function openMenuItem(wgt, t, connected, key)
   wgt.menu = nil
   if key == "batt" then
     wgt.bp = { phase = "pick", sel = t.battProfile, since = getTime() }
+    return
+  end
+  if key == "view" then
+    wgt.infoView, wgt.fc = 1, {}
+    if CONFIG.simulate then wgt.fc[FC_PAGES[1].cmd] = FC_SIM_REPLIES[FC_PAGES[1].cmd] end
     return
   end
   local okStart, run, err, compiling = pcall(key == "rf2" and ((CONFIG.lvgl and lvgl) and startRf2Lvgl or startRf2) or startElrs, wgt.fcApi)
@@ -4086,9 +4194,26 @@ function LV.bar(k, x, y, w, h, labelKey, valueKey, pctKey, colorKey, color, font
   LV.rect(k, x, y, 0, h, color, nil, {
     color = colorKey and LV.dv(colorKey, color) or color,
     size = function() return math.floor(w * math.max(0, math.min(100, LV.v[pctKey] or 0)) / 100), h end })
-  local lw = math.floor(w * 0.58) - 12
-  LV.fitText(k, x + 12, y + h / 2, lw, labelKey, "", font, COLOR.white)
-  LV.fitText(k, x + 12 + lw, y + h / 2, w - lw - 24, valueKey, "--", font, COLOR.white, RIGHT)
+  -- one font for both texts: the largest up to `font` where they fit side by side
+  local avail = w - 24 - 24
+  local function shared()
+    local a, b = LV.v[labelKey] or "", LV.v[valueKey] or "--"
+    local key = a .. "|" .. b .. "|" .. avail .. "|" .. font
+    local f = LV.fits[key]
+    if f then return f end
+    f = SMLSIZE
+    for _, cand in ipairs({ DBLSIZE, MIDSIZE, 0 }) do
+      if cand <= font and textWidth(a, cand) + textWidth(b, cand) <= avail then f = cand; break end
+    end
+    LV.nFits = (LV.nFits or 0) + 1
+    if LV.nFits > 200 then LV.fits, LV.nFits = {}, 0 end
+    LV.fits[key] = f
+    return f
+  end
+  local cy = y + h / 2
+  local pos = function(px) return function() return math.floor(px), math.floor(cy - LV.lh(shared()) / 2) end end
+  LV.text(k, x + 12, cy, w - 24, LV.dv(labelKey, ""), font, COLOR.white, LEFT, { font = shared, pos = pos(x + 12) })
+  LV.text(k, x + 12, cy, w - 24, LV.dv(valueKey, "--"), font, COLOR.white, RIGHT, { font = shared, pos = pos(x + 12) })
 end
 
 -- top bar: warnings left, Menu button, date/time, signal bars, TX battery
@@ -4362,7 +4487,7 @@ function LV.buildFlightLog(k, wgt, w, h)
   local labelX = { px - 46, px + pw + 6, px + pw + 6 + 45 }
   local labelAlign = { RIGHT, LEFT, LEFT }
   for i, d in ipairs(defs) do
-    local decimals = (d.step ~= math.floor(d.step) or d.bottom ~= math.floor(d.bottom)) and 1 or 0
+    local decimals = (isWhole(d.step) and isWhole(d.bottom)) and 0 or 1
     for q = 0, CHART_DIVS do
       LV.text(k, labelX[i], base - math.floor(q * top / CHART_DIVS), 40, fmt(d.bottom + q * d.step, decimals),
         SMLSIZE, d.color, labelAlign[i])
@@ -4388,6 +4513,72 @@ function LV.buildFlightLog(k, wgt, w, h)
     LV.text(k, tx - 30, cyTop + ch + 13, 60, fmtTime(tt), SMLSIZE, COLOR.muted, CENTER)
     tt = tt + tStep
   end
+end
+
+-- FC settings page (read only): FC_PAGES[wgt.infoView], parsed from the
+-- MSP reply in wgt.fc. Built again whenever that reply changes.
+function LV.buildFcView(k, wgt, w, h, t, parsed)
+  LV.topBar(k, wgt, w, false)
+  local pad, y = 12, 12 + 30 + 12
+  local panelW = w - pad * 2
+  local page = FC_PAGES[wgt.infoView]
+  local titleH = 44
+  LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
+  LV.text(k, pad + 14, y + titleH / 2, 260, page.title, MIDSIZE, COLOR.white)
+  local sub = ""
+  if page.cmd == 111 then sub = "Rate profile " .. (t.bank and fmt(t.bank, 0) or "--")
+  elseif page.cmd ~= nil then sub = "PID profile " .. (t.pidProfile and fmt(t.pidProfile, 0) or "--") end
+  if parsed and parsed.note then sub = sub .. "   " .. parsed.note end
+  LV.text(k, pad + 270, y + titleH / 2, 260, sub, SMLSIZE, COLOR.dim)
+  LV.text(k, pad + panelW - 214, y + titleH / 2, 200, wgt.infoView .. " / " .. #FC_PAGES, SMLSIZE, COLOR.muted, RIGHT)
+  -- full screen only (buttons): next page / close
+  LV.button(k, pad + panelW - 8 - 100 - 8 - 100, y + 6, 100, titleH - 12, "Next", function()
+    local n = (wgt.infoView or 0) + 1
+    wgt.infoView = (n <= #FC_PAGES) and n or 1
+    wgt.fc = wgt.fc or {}
+    wgt.fc[FC_PAGES[wgt.infoView].cmd] = CONFIG.simulate and FC_SIM_REPLIES[FC_PAGES[wgt.infoView].cmd] or nil
+  end, 0)
+  LV.button(k, pad + panelW - 8 - 100, y + 6, 100, titleH - 12, "Close", function() wgt.infoView = nil end, 0)
+
+  local hintH = 36
+  local cy, ch = y + titleH + pad, h - pad - hintH - pad - (y + titleH + pad)
+  LV.rect(k, pad, cy, panelW, ch, COLOR.panel, 6)
+  if not parsed then
+    LV.text(k, pad, cy + ch / 2, panelW, "Reading from the FC...", MIDSIZE, COLOR.dim, CENTER)
+  elseif parsed.kind == "table" then
+    local n = #parsed.cols
+    local headW, gap, cellH = 150, 8, 58
+    local cellW = math.floor((panelW - 28 - headW - (n - 1) * gap) / n)
+    local x0, y0 = pad + 14 + headW, cy + 12
+    for c = 1, n do
+      LV.text(k, x0 + (c - 1) * (cellW + gap), y0 + 12, cellW, parsed.cols[c], SMLSIZE, COLOR.dim, CENTER)
+    end
+    for r, row in ipairs(parsed.rows) do
+      local ry = y0 + 28 + (r - 1) * (cellH + gap)
+      LV.text(k, pad + 18, ry + cellH / 2, headW - 10, row[1], LV.fitFont(row[1], headW - 14, MIDSIZE), COLOR.white)
+      for c = 1, n do
+        local cx = x0 + (c - 1) * (cellW + gap)
+        LV.rect(k, cx, ry, cellW, cellH, COLOR.barBg, 4)
+        local text = tostring(row[2][c] or "--")
+        LV.text(k, cx, ry + cellH / 2, cellW, text, LV.fitFont(text, cellW - 8, MIDSIZE), COLOR.white, CENTER)
+      end
+    end
+  else
+    local cols, gap, tileH = 4, 8, 62
+    local tileW = math.floor((panelW - 28 - (cols - 1) * gap) / cols)
+    for i, it in ipairs(parsed.items) do
+      local tx = pad + 14 + ((i - 1) % cols) * (tileW + gap)
+      local ty = cy + 12 + math.floor((i - 1) / cols) * (tileH + gap)
+      LV.rect(k, tx, ty, tileW, tileH, COLOR.barBg, 4)
+      local key = "fcItem" .. i
+      LV.v[key] = tostring(it[2] or "--")
+      LV.tab(k, tx, ty, tileW, tileH, it[1], key)
+    end
+  end
+  local hy = h - pad - hintH
+  LV.rect(k, pad, hy, panelW, hintH, COLOR.panel, 6)
+  LV.text(k, pad + 14, hy + hintH / 2, panelW - 28,
+    "Read only  -  Page switch: next page  -  edit: full screen > Menu > Rotorflight settings", SMLSIZE, COLOR.dim)
 end
 
 -- small zones (not the 800x480 layout): headspeed + pack voltage
@@ -4422,7 +4613,7 @@ function LV.buildToolMsg(k, wgt, w, h)
   LV.text(k, 50, h - 42, w - 100, LV.dv("toolMsg", ""), SMLSIZE, COLOR.white, CENTER, { visible = vis })
 end
 
-function LV.build(wgt, screen, t)
+function LV.build(wgt, screen, t, parsed)
   local w, h = wgt.zone.w, wgt.zone.h
   local k = {}
   LV.rect(k, 0, 0, w, h, COLOR.bg)
@@ -4438,6 +4629,8 @@ function LV.build(wgt, screen, t)
     LV.buildBattSelect(k, wgt, w, h)
   elseif screen == "flightlog" then
     LV.buildFlightLog(k, wgt, w, h)
+  elseif screen == "fcview" then
+    LV.buildFcView(k, wgt, w, h, t, parsed)
   else
     LV.buildDashboard(k, wgt, w, h)
   end
@@ -4577,6 +4770,7 @@ function LV.screenType(wgt, t)
   if not isTelemetryConnected(t) then return wgt.showFlightLog and "flightlog" or "standby" end
   if wgt.armWarningActive then return "armwarning" end
   if wgt.bp and wgt.bp.phase ~= "wait" then return "battselect" end
+  if wgt.infoView and FC_PAGES[wgt.infoView] then return "fcview" end
   return "dashboard"
 end
 
@@ -4638,10 +4832,26 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
     end
   end
 
+  -- fcview: rebuilt when its page or the FC reply changes
+  local sub, parsed = nil, nil
+  if screen == "fcview" then
+    local page = FC_PAGES[wgt.infoView]
+    local buf = wgt.fc and wgt.fc[page.cmd]
+    if buf then
+      if wgt.fcParsedBuf ~= buf then
+        local okP, res = pcall(page.parse, buf)
+        wgt.fcParsed, wgt.fcParsedBuf = okP and res or nil, buf
+      end
+      parsed = wgt.fcParsed
+    end
+    sub = wgt.infoView .. ":" .. tostring(buf)
+  end
   if wgt.lvScreen ~= screen or wgt.lvTheme ~= COLOR or wgt.lvW ~= w or wgt.lvH ~= h or wgt.lvFull ~= full
+     or wgt.lvSub ~= sub
      or wgt.lvModel ~= wgt.modelImagePath or (screen == "armwarning" and wgt.lvArmd ~= t.armd) then
     LV.update(wgt, t, screen, connected, armed)
-    LV.build(wgt, screen, t)
+    LV.build(wgt, screen, t, parsed)
+    wgt.lvSub = sub
     wgt.lvScreen, wgt.lvTheme, wgt.lvW, wgt.lvH, wgt.lvModel, wgt.lvArmd = screen, COLOR, w, h, wgt.modelImagePath, t.armd
     wgt.lvFull = full
   else
@@ -4883,6 +5093,7 @@ local options = {
   { "BattSel", SOURCE, 0 },
   { "BattPrev", SOURCE, 0 },
   { "BattSW", BOOL, 0 },
+  { "Page", SOURCE, 0 },
 }
 
 return {
