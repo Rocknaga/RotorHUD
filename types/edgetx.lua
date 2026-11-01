@@ -188,6 +188,13 @@ function lcd.getBitmapSize(bitmap) end
 ---@return integer height
 function lcd.sizeText(text, flags) end
 
+--- Create/update a telemetry sensor (used by the built-in Rotorflight decoder).
+function setTelemetryValue(id, subId, instance, value, unit, precision, name) end
+--- Pop one received CRSF frame: command, data table (nil when empty).
+function crossfireTelemetryPop() end
+--- Queue a CRSF frame; no args = buffer free?; nil when no CRSF module.
+function crossfireTelemetryPush(command, data) end
+
 --- Straight line. Confirmed working in the Companion 2.12 TX16S MK3
 --- simulator (flight-log chart); not yet seen on the radio itself.
 ---@param pattern integer SOLID / DOTTED

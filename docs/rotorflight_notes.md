@@ -80,7 +80,13 @@ main.lua の `ARMD_REASONS` / `decodeArmd` がこの表。ARM 警告画面に理
 - テレメトリ: `BATTERY_PROFILE` 0x1214 (U8、番号 + 1)。EdgeTX 上の名前は **`BAT#`**
   (rotorflight-lua-scripts `src/SCRIPTS/RF2/rf2tlm_sensors.lua` 97 番。Gov / Hspd / ARMD など他の名前もこの表と一致)
 
-## 容量を MSP で読めるか (結論: ウィジェットからは確実に読めない)
+## 容量を MSP で読めるか
+
+**更新 (2026-11-01)**: RF Telem にテレメトリデコーダーを内蔵し、rf2bg を外す運用にしたので、
+受信キューを RF Telem だけが読む → MSP 応答を受け取れるようになった (`rfMspUpdate`、`parseBatteryConfig`)。
+以下は rf2bg と共存していたときの分析 (`CONFIG.telemetry.decode = false` のときは今もこの状態)。
+
+### rf2bg と共存する場合 (ウィジェットからは確実に読めない)
 
 - FC 側は可能: `MSP_BATTERY_CONFIG` (32) の応答に 6 プロファイル分の容量 (`msp.c` 905-906、
   rotorflight-lua-scripts `MSP/mspBatteryConfig.lua` も同形式で読む。API 12.09 以降)

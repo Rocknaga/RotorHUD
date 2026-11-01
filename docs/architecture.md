@@ -26,8 +26,12 @@
 
 ## 毎フレームの処理 (`tick`)
 
-- `tick(wgt)`: テレメトリ読み取り → 接続/切断の判定 → 全トラッカー → `updateFlightSamples` → `runAlarms`
+- `tick(wgt)`: `rfTelemetryPump` (CRSF キューを最大 20 フレーム読み、0x88 → `setTelemetryValue` でセンサー化、
+  0x7B → MSP 応答の組み立て) → テレメトリ読み取り → 接続/切断の判定 → 全トラッカー → `updateFlightSamples` → `runAlarms`
 - `refresh` (表示中) と `background` (非表示中) の両方が `tick` を呼ぶ。描画は `refresh` だけ
+- 末尾で `bpUpdate` (バッテリープロファイル選択) と `rfMspUpdate` (接続後に MSP_BATTERY_CONFIG を最大 6 回要求) を呼ぶ
+- RF TELEMETRY 節: `RF_SENSORS` (sid → 名前・単位・桁・解読関数、公式と同じ全 ID)、`decodeCustomFrame`、
+  `decodeMspFrame`、`mspRequest` (MSP v1 単一フレーム)、`parseBatteryConfig`
 - `runAlarms`: 危険 (`critical`、繰り返し) / 注意 (`caution`、1 回、ヒステリシスで再武装) /
   情報 (`onChange`、接続直後の初期値では鳴らさない)。`latch` が継続時間とヒステリシスを持つ
 - 消音: オプション `Mute` (SOURCE) の値 > 0 で音声と注意の振動を止める (`isMuted`)

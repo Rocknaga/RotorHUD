@@ -1,6 +1,12 @@
 --[[
   Rotorflight Telemetry Dashboard Widget for EdgeTX (Color LCD)
   ----------------------------------------------------------------
+  License: GNU GPL v3.0 (see LICENSE in the project root). The RF
+  TELEMETRY section (CRSF custom telemetry decoder, sensor table and MSP
+  framing) is ported from rotorflight-lua-scripts
+  (https://github.com/rotorflight/rotorflight-lua-scripts, GPL-3.0).
+  This program comes with ABSOLUTELY NO WARRANTY.
+
   Dashboard-style layout inspired by the Rotorflight/RFSuite home screen:
   top status chips, big RC-volt/RPM/flight-timer readouts, a color-coded
   battery bar, a status/warning list, a throttle bar, and a model-name
@@ -176,6 +182,15 @@ local CONFIG = {
     -- src/SCRIPTS/RF2/rf2tlm_sensors.lua - the same table that names every
     -- sensor above.
     batteryProfile  = { "BAT#", "Bat#" },
+  },
+
+  -- Built-in Rotorflight telemetry decoder (see RF TELEMETRY). With
+  -- decode = true the rf2bg special function / RfTool widget must be
+  -- removed: both read the same CRSF queue and would split the frames.
+  -- Set false to keep using rf2bg (then no capacities from the FC).
+  telemetry = {
+    decode = true,
+    readCapacities = true, -- MSP_BATTERY_CONFIG -> per-profile mAh
   },
 
   -- Battery-profile picker shown right after connecting (see BATTERY
@@ -1973,6 +1988,10 @@ local function drawBattSelect(wgt, t, y, w, h)
     lcd.drawText(tx + 18, ty + tileH / 2 - 12, tostring(i),
       LEFT + VCENTER + DBLSIZE + (selected and COLOR.white or COLOR.dim))
     local label = cfg.labels[i] or ("Profile " .. i)
+    local cap = wgt.battCaps and wgt.battCaps[i]
+    if cap and cap > 0 then -- FC capacity, after the label if one was set
+      label = (label ~= "Profile " .. i) and (label .. "  " .. cap .. "mAh") or (cap .. "mAh")
+    end
     lcd.drawText(tx + 18, ty + tileH - 22, label,
       LEFT + VCENTER + fitFontMeasured(tileW - 30, 27, label, SMLSIZE) + (selected and COLOR.white or COLOR.dim))
     if t.battProfile == i then
@@ -2315,8 +2334,13 @@ local function drawLarge(wgt, t, w, h)
   local battLabel = "Battery"
   if t.battProfile then
     battLabel = "Battery #" .. t.battProfile
+    local cap = wgt.battCaps and wgt.battCaps[t.battProfile]
     local custom = CONFIG.batteryProfile.labels[t.battProfile]
-    if custom and custom ~= "Profile " .. t.battProfile then battLabel = battLabel .. " " .. custom end
+    if cap and cap > 0 then
+      battLabel = battLabel .. " " .. cap .. "mAh" -- read from the FC (RF TELEMETRY)
+    elseif custom and custom ~= "Profile " .. t.battProfile then
+      battLabel = battLabel .. " " .. custom
+    end
   end
   drawChamferedRect(pad, row3Y, w - pad * 2, row3H, COLOR.panel, COLOR.bg, 8)
   drawStatBar(pad + 12, row3Y + 10, w - pad * 2 - 24, row3H - 18,
@@ -2640,22 +2664,144 @@ local function runAlarms(wgt, t, running, connected)
   end
 end
 
--- ============================== BATTERY PROFILE ===========================
--- Right after a connect (disarmed), a picker for the FC's 6 battery
--- profiles. The choice goes out as MSP_SET_BATTERY_PROFILE (176), framed
--- exactly like rotorflight-lua-scripts src/SCRIPTS/RF2/MSP/crsf.lua and
--- common.lua: CRSF frame 0x7C (MSP write) to 0xC8 (FC) from 0xEA (radio),
--- MSP v1 payload { status, size, cmd, data, crc }.
--- Only crossfireTelemetryPush is used. crossfireTelemetryPop reads one
--- queue shared by every script (EdgeTX 2.12 lua/api_general.cpp,
--- getTelemetryQueue) and would steal the frames rf2tlm turns into the
--- sensors - so success is confirmed by the BAT# sensor changing instead.
--- The FC keeps the profile in RAM only (no EEPROM write: sensors/battery.c
--- changeBatteryProfile), i.e. until its next power-up - hence asking on
--- every connect.
+-- ============================== RF TELEMETRY ==============================
+-- Rotorflight CRSF custom telemetry decoder + MSP-over-CRSF client, so the
+-- rf2bg special function (or the RfTool widget) isn't needed.
+-- Ported from rotorflight-lua-scripts (GPL-3.0, like this file):
+--   src/SCRIPTS/RF2/rf2tlm.lua          frame loop
+--   src/SCRIPTS/RF2/rf2tlm_sensors.lua  sensor ids / names / units / decoders
+--   src/SCRIPTS/RF2/MSP/crsf.lua, common.lua  MSP framing
+-- Same sids and names as rf2tlm, so the model's existing sensors carry on.
+-- bit32 calls rewritten as arithmetic. Not ported: background_init's FC
+-- writes (RTC, model name) - only decoding and the MSP reads we need.
+--
+-- crossfireTelemetryPop reads ONE queue shared by every script (EdgeTX 2.12
+-- lua/api_general.cpp getTelemetryQueue), so rf2bg / RfTool must be off:
+-- two readers split the frames between them and both lose data.
 
-local MSP_SET_BATTERY_PROFILE = 176
-local mspSeq = 0
+local function decNil(d, p) return nil, p end
+local function decU8(d, p) return d[p], p + 1 end
+local function decS8(d, p) local v = d[p]; return v < 0x80 and v or v - 0x100, p + 1 end
+local function decU16(d, p) return d[p] * 256 + d[p + 1], p + 2 end
+local function decS16(d, p) local v = d[p] * 256 + d[p + 1]; return v < 0x8000 and v or v - 0x10000, p + 2 end
+local function decU24(d, p) return (d[p] * 256 + d[p + 1]) * 256 + d[p + 2], p + 3 end
+local function decS24(d, p) local v = decU24(d, p); return v < 0x800000 and v or v - 0x1000000, p + 3 end
+local function decU32(d, p) return ((d[p] * 256 + d[p + 1]) * 256 + d[p + 2]) * 256 + d[p + 3], p + 4 end
+local function decS32(d, p) local v = decU32(d, p); return v < 0x80000000 and v or v - 0x100000000, p + 4 end
+local function decS12S12(d, p)
+  local a = (d[p] % 16) * 256 + d[p + 1]
+  local b = math.floor(d[p] / 16) * 256 + d[p + 2]
+  return a < 0x800 and a or a - 0x1000, b < 0x800 and b or b - 0x1000, p + 3
+end
+local function decCellV(d, p) local v = d[p]; return v > 0 and v + 200 or 0, p + 1 end
+local function decCells(d, p)
+  local cnt = d[p]; p = p + 1
+  setTelemetryValue(0x1020, 0, 0, cnt, UNIT_RAW, 0, "Cel#")
+  for i = 1, cnt do
+    local v = d[p]; p = p + 1
+    v = v > 0 and v + 200 or 0
+    setTelemetryValue(0x102F, 0, 0, cnt * 16777216 + (i - 1) * 65536 + v, UNIT_CELLS, 2, "Cels")
+  end
+  return nil, p
+end
+local function decControl(d, p)
+  local pt, rl, yw, cl
+  pt, rl, p = decS12S12(d, p)
+  yw, cl, p = decS12S12(d, p)
+  setTelemetryValue(0x1031, 0, 0, pt, UNIT_DEGREE, 2, "CPtc")
+  setTelemetryValue(0x1032, 0, 0, rl, UNIT_DEGREE, 2, "CRol")
+  setTelemetryValue(0x1033, 0, 0, 3 * yw, UNIT_DEGREE, 2, "CYaw")
+  setTelemetryValue(0x1034, 0, 0, cl, UNIT_DEGREE, 2, "CCol")
+  return nil, p
+end
+local function decTriple(sids, names, unit, prec)
+  return function(d, p)
+    for i = 1, 3 do
+      local v; v, p = decS16(d, p)
+      setTelemetryValue(sids[i], 0, 0, v, unit, prec, names[i])
+    end
+    return nil, p
+  end
+end
+local function decLatLong(d, p)
+  local lat, lon
+  lat, p = decS32(d, p)
+  lon, p = decS32(d, p)
+  setTelemetryValue(0x1125, 0, 0, 0, UNIT_GPS, 0, "GPS")
+  setTelemetryValue(0x1125, 0, 0, lat / 10, 44) -- UNIT_GPS_LATITUDE
+  setTelemetryValue(0x1125, 0, 0, lon / 10, 43) -- UNIT_GPS_LONGITUDE
+  return nil, p
+end
+local function decAdjFunc(d, p)
+  local fun, val
+  fun, p = decU16(d, p)
+  val, p = decS32(d, p)
+  setTelemetryValue(0x1221, 0, 0, fun, UNIT_RAW, 0, "AdjF")
+  setTelemetryValue(0x1222, 0, 0, val, UNIT_RAW, 0, "AdjV")
+  return nil, p
+end
+
+-- sid -> { name, unit, prec, decoder }, every sensor rf2tlm_sensors.lua
+-- knows: a frame is a run of sid/value pairs, and an unknown sid makes the
+-- rest of the frame unreadable, so the table can't be trimmed.
+local RF_SENSORS = {
+  [0x1000] = { "NONE", UNIT_RAW, 0, decNil },      [0x1001] = { "BEAT", UNIT_RAW, 0, decU16 },
+  [0x1011] = { "Vbat", UNIT_VOLTS, 2, decU16 },    [0x1012] = { "Curr", UNIT_AMPS, 2, decU16 },
+  [0x1013] = { "Capa", UNIT_MAH, 0, decU16 },      [0x1014] = { "Bat%", UNIT_PERCENT, 0, decU8 },
+  [0x1020] = { "Cel#", UNIT_RAW, 0, decU8 },       [0x1021] = { "Vcel", UNIT_VOLTS, 2, decCellV },
+  [0x102F] = { "Cels", UNIT_VOLTS, 2, decCells },  [0x1030] = { "Ctrl", UNIT_RAW, 0, decControl },
+  [0x1031] = { "CPtc", UNIT_DEGREE, 1, decS16 },   [0x1032] = { "CRol", UNIT_DEGREE, 1, decS16 },
+  [0x1033] = { "CYaw", UNIT_DEGREE, 1, decS16 },   [0x1034] = { "CCol", UNIT_DEGREE, 1, decS16 },
+  [0x1035] = { "Thr", UNIT_PERCENT, 0, decS8 },
+  [0x1041] = { "EscV", UNIT_VOLTS, 2, decU16 },    [0x1042] = { "EscI", UNIT_AMPS, 2, decU16 },
+  [0x1043] = { "EscC", UNIT_MAH, 0, decU16 },      [0x1044] = { "EscR", UNIT_RPMS, 0, decU24 },
+  [0x1045] = { "EscP", UNIT_PERCENT, 1, decU16 },  [0x1046] = { "Esc%", UNIT_PERCENT, 1, decU16 },
+  [0x1047] = { "EscT", UNIT_CELSIUS, 0, decU8 },   [0x1048] = { "BecT", UNIT_CELSIUS, 0, decU8 },
+  [0x1049] = { "BecV", UNIT_VOLTS, 2, decU16 },    [0x104A] = { "BecI", UNIT_AMPS, 2, decU16 },
+  [0x104E] = { "EscF", UNIT_RAW, 0, decU32 },      [0x104F] = { "Esc#", UNIT_RAW, 0, decU8 },
+  [0x1051] = { "Es2V", UNIT_VOLTS, 2, decU16 },    [0x1052] = { "Es2I", UNIT_AMPS, 2, decU16 },
+  [0x1053] = { "Es2C", UNIT_MAH, 0, decU16 },      [0x1054] = { "Es2R", UNIT_RPMS, 0, decU24 },
+  [0x1057] = { "Es2T", UNIT_CELSIUS, 0, decU8 },   [0x105F] = { "Es2#", UNIT_RAW, 0, decU8 },
+  [0x1080] = { "Vesc", UNIT_VOLTS, 2, decU16 },    [0x1081] = { "Vbec", UNIT_VOLTS, 2, decU16 },
+  [0x1082] = { "Vbus", UNIT_VOLTS, 2, decU16 },    [0x1083] = { "Vmcu", UNIT_VOLTS, 2, decU16 },
+  [0x1090] = { "Iesc", UNIT_AMPS, 2, decU16 },     [0x1091] = { "Ibec", UNIT_AMPS, 2, decU16 },
+  [0x1092] = { "Ibus", UNIT_AMPS, 2, decU16 },     [0x1093] = { "Imcu", UNIT_AMPS, 2, decU16 },
+  [0x10A0] = { "Tesc", UNIT_CELSIUS, 0, decU8 },   [0x10A1] = { "Tbec", UNIT_CELSIUS, 0, decU8 },
+  [0x10A3] = { "Tmcu", UNIT_CELSIUS, 0, decU8 },
+  [0x10B1] = { "Hdg", UNIT_DEGREE, 1, decS16 },    [0x10B2] = { "Alt", UNIT_METERS, 2, decS24 },
+  [0x10B3] = { "Var", UNIT_METERS_PER_SECOND, 2, decS16 },
+  [0x10C0] = { "Hspd", UNIT_RPMS, 0, decU16 },     [0x10C1] = { "Tspd", UNIT_RPMS, 0, decU16 },
+  [0x1100] = { "Attd", UNIT_DEGREE, 1,
+               decTriple({ 0x1101, 0x1102, 0x1103 }, { "Ptch", "Roll", "Yaw" }, UNIT_DEGREE, 1) },
+  [0x1101] = { "Ptch", UNIT_DEGREE, 0, decS16 },   [0x1102] = { "Roll", UNIT_DEGREE, 0, decS16 },
+  [0x1103] = { "Yaw", UNIT_DEGREE, 0, decS16 },
+  [0x1110] = { "Accl", UNIT_G, 2,
+               decTriple({ 0x1111, 0x1112, 0x1113 }, { "AccX", "AccY", "AccZ" }, UNIT_G, 2) },
+  [0x1111] = { "AccX", UNIT_G, 1, decS16 },        [0x1112] = { "AccY", UNIT_G, 1, decS16 },
+  [0x1113] = { "AccZ", UNIT_G, 1, decS16 },
+  [0x1121] = { "Sats", UNIT_RAW, 0, decU8 },       [0x1122] = { "PDOP", UNIT_RAW, 0, decU8 },
+  [0x1123] = { "HDOP", UNIT_RAW, 0, decU8 },       [0x1124] = { "VDOP", UNIT_RAW, 0, decU8 },
+  [0x1125] = { "GPS", UNIT_RAW, 0, decLatLong },   [0x1126] = { "GAlt", UNIT_METERS, 1, decS16 },
+  [0x1127] = { "GCrs", UNIT_DEGREE, 1, decS16 },
+  [0x1128] = { "GSpd", UNIT_METERS_PER_SECOND, 2, decU16 },
+  [0x1129] = { "GDis", UNIT_METERS, 1, decU16 },   [0x112A] = { "GDir", UNIT_METERS, 1, decU16 },
+  [0x1141] = { "CPU%", UNIT_PERCENT, 0, decU8 },   [0x1142] = { "SYS%", UNIT_PERCENT, 0, decU8 },
+  [0x1143] = { "RT%", UNIT_PERCENT, 0, decU8 },
+  [0x1200] = { "MDL#", UNIT_RAW, 0, decU8 },       [0x1201] = { "Mode", UNIT_RAW, 0, decU16 },
+  [0x1202] = { "ARM", UNIT_RAW, 0, decU8 },        [0x1203] = { "ARMD", UNIT_RAW, 0, decU32 },
+  [0x1204] = { "Resc", UNIT_RAW, 0, decU8 },       [0x1205] = { "Gov", UNIT_RAW, 0, decU8 },
+  [0x1211] = { "PID#", UNIT_RAW, 0, decU8 },       [0x1212] = { "RTE#", UNIT_RAW, 0, decU8 },
+  [0x1214] = { "BAT#", UNIT_RAW, 0, decU8 },       [0x1213] = { "LED#", UNIT_RAW, 0, decU8 },
+  [0x1220] = { "ADJ", UNIT_RAW, 0, decAdjFunc },
+  [0xDB00] = { "DBG0", UNIT_RAW, 0, decS32 },      [0xDB01] = { "DBG1", UNIT_RAW, 0, decS32 },
+  [0xDB02] = { "DBG2", UNIT_RAW, 0, decS32 },      [0xDB03] = { "DBG3", UNIT_RAW, 0, decS32 },
+  [0xDB04] = { "DBG4", UNIT_RAW, 0, decS32 },      [0xDB05] = { "DBG5", UNIT_RAW, 0, decS32 },
+  [0xDB06] = { "DBG6", UNIT_RAW, 0, decS32 },      [0xDB07] = { "DBG7", UNIT_RAW, 0, decS32 },
+}
+
+local CRSF_CUSTOM_TELEM, CRSF_MSP_WRITE, CRSF_MSP_RESP = 0x88, 0x7C, 0x7B
+local CRSF_ADDR_FC, CRSF_ADDR_RADIO = 0xC8, 0xEA
+local MSP_BATTERY_CONFIG, MSP_SET_BATTERY_PROFILE = 32, 176
 
 -- Byte XOR in plain arithmetic (EdgeTX Lua is 5.2-based: no ~ operator).
 local function xor8(a, b)
@@ -2667,21 +2813,133 @@ local function xor8(a, b)
   return r
 end
 
+-- One 0x88 frame: { dest, origin, frame id, sid hi, sid lo, value..., ... }
+-- (rf2tlm.lua crossfirePop). Frame-id gaps count as skipped frames.
+local function decodeCustomFrame(rt, data)
+  local fid = data[3]
+  if rt.frameId and (fid - rt.frameId) % 256 > 1 then rt.skip = rt.skip + 1 end
+  rt.frameId, rt.count = fid, rt.count + 1
+  local p = 4
+  while p < #data do
+    local sid; sid, p = decU16(data, p)
+    local s = RF_SENSORS[sid]
+    if not s then break end
+    local val; val, p = s[4](data, p)
+    if val then setTelemetryValue(sid, 0, 0, val, s[2], s[3], s[1]) end
+  end
+  setTelemetryValue(0xEE01, 0, 0, rt.count, UNIT_RAW, 0, "*Cnt")
+  setTelemetryValue(0xEE02, 0, 0, rt.skip, UNIT_RAW, 0, "*Skp")
+end
+
+-- MSP v1 reply reassembly (common.lua mspReceivedReply): status byte =
+-- error 0x80 | version 0x60 | start 0x10 | sequence 0x0F, then size and
+-- command on the start frame, then data, split over as many frames as
+-- needed. Calls rt.onReply(cmd, bytes, isError) when complete.
+local function decodeMspFrame(rt, data)
+  local status = data[3]
+  if not status then return end
+  local start = math.floor(status / 16) % 2 == 1
+  local version = math.floor(status / 32) % 4
+  local p = 4
+  if start then
+    if version ~= 1 then rt.rx = nil; return end -- only MSP v1 is requested
+    rt.rx = { size = data[p], cmd = data[p + 1], buf = {}, err = status >= 128, seq = status % 16 }
+    p = p + 2
+  elseif not rt.rx or (rt.rx.seq + 1) % 16 ~= status % 16 then
+    rt.rx = nil
+    return
+  else
+    rt.rx.seq = status % 16
+  end
+  local rx = rt.rx
+  while p <= #data and #rx.buf < rx.size do
+    rx.buf[#rx.buf + 1] = data[p]
+    p = p + 1
+  end
+  if #rx.buf >= rx.size then
+    rt.rx = nil
+    if rt.onReply then rt.onReply(rx.cmd, rx.buf, rx.err) end
+  end
+end
+
+-- Queue one MSP v1 request that fits a single frame (<= 4 data bytes).
+-- False when the CRSF output buffer is busy or no module is CRSF.
+local mspSeq = 0
+local function mspRequest(cmd, payload)
+  if not crossfireTelemetryPush or crossfireTelemetryPush() ~= true then return false end
+  local frame = { CRSF_ADDR_FC, CRSF_ADDR_RADIO, 0x30 + mspSeq, #payload, cmd }
+  local crc = xor8(#payload, cmd)
+  for i = 1, #payload do
+    frame[#frame + 1] = payload[i]
+    crc = xor8(crc, payload[i])
+  end
+  frame[#frame + 1] = crc
+  mspSeq = (mspSeq + 1) % 16
+  return crossfireTelemetryPush(CRSF_MSP_WRITE, frame) == true
+end
+
+-- Drain the shared queue (at most 20 frames per call to stay clear of the
+-- CPU limit): custom telemetry -> sensors, MSP replies -> rt.onReply.
+local function rfTelemetryPump(wgt)
+  if CONFIG.simulate or not CONFIG.telemetry.decode or not crossfireTelemetryPop then return end
+  local rt = wgt.rt
+  for _ = 1, 20 do
+    local cmd, data = crossfireTelemetryPop()
+    if not cmd then return end
+    if cmd == CRSF_CUSTOM_TELEM and data then
+      decodeCustomFrame(rt, data)
+    elseif cmd == CRSF_MSP_RESP and data and data[1] == CRSF_ADDR_RADIO and data[2] == CRSF_ADDR_FC then
+      decodeMspFrame(rt, data)
+    end
+  end
+end
+
+-- MSP_BATTERY_CONFIG (32) reply, 4.6 / API 12.09+ layout (msp.c, same as
+-- MSP/mspBatteryConfig.lua): U16 active capacity, U8 cells, U8 voltage src,
+-- U8 current src, 4 x U16 cell voltages, U8 lvc %, U8 consumption warn %,
+-- then 6 x U16 profile capacities - all little-endian, capacities at 16..27.
+local function parseBatteryConfig(buf)
+  if #buf < 27 then return nil end
+  local caps = {}
+  for i = 1, 6 do caps[i] = buf[16 + (i - 1) * 2] + buf[17 + (i - 1) * 2] * 256 end
+  return caps
+end
+
+-- Per connect: ask for the profile capacities (after the connect quiet
+-- time, retried every 1.5s, at most 6 times). Fills wgt.battCaps[1..6].
+local function rfMspUpdate(wgt, connected)
+  local cfg, rt = CONFIG.telemetry, wgt.rt
+  if CONFIG.simulate or not cfg.decode or not cfg.readCapacities or not connected then return end
+  if wgt.battCaps or rt.capTries >= 6 then return end
+  local now = getTime()
+  if now < (wgt.alarm.quietUntil or 0) or now - (rt.capAskedAt or -1000) < 150 then return end
+  if mspRequest(MSP_BATTERY_CONFIG, {}) then rt.capAskedAt, rt.capTries = now, rt.capTries + 1 end
+end
+
+local function newRfTelemetryState(wgt)
+  local rt = { count = 0, skip = 0, capTries = 0 }
+  rt.onReply = function(cmd, buf, isError)
+    if cmd == MSP_BATTERY_CONFIG and not isError then wgt.battCaps = parseBatteryConfig(buf) end
+  end
+  return rt
+end
+
+-- ============================== BATTERY PROFILE ===========================
+-- Right after a connect (disarmed), a picker for the FC's 6 battery
+-- profiles. The choice goes out as MSP_SET_BATTERY_PROFILE (176) through
+-- mspRequest above; success is confirmed by the BAT# sensor changing.
+-- The FC keeps the profile in RAM only (no EEPROM write: sensors/battery.c
+-- changeBatteryProfile), i.e. until its next power-up - hence asking on
+-- every connect.
+
 -- Queue the MSP write for profile 1..6. False when the CRSF output buffer
 -- is busy or no module is CRSF (the caller retries).
 local function mspSetBatteryProfile(wgt, profile)
-  local index = profile - 1
   if CONFIG.simulate then -- no FC: simulateTelemetry follows after 0.5s
     wgt.simBattPending = { value = profile, at = getTime() + 50 }
     return true
   end
-  if not crossfireTelemetryPush or crossfireTelemetryPush() ~= true then return false end
-  local size = 1
-  local status = 0x30 + mspSeq -- MSP v1 (1 << 5) + start flag (1 << 4) + sequence
-  mspSeq = (mspSeq + 1) % 16
-  local crc = xor8(xor8(size, MSP_SET_BATTERY_PROFILE), index)
-  return crossfireTelemetryPush(0x7C,
-    { 0xC8, 0xEA, status, size, MSP_SET_BATTERY_PROFILE, index, crc }) == true
+  return mspRequest(MSP_SET_BATTERY_PROFILE, { profile - 1 })
 end
 
 -- wgt.bp: nil = no picker. phase: "wait" (for BAT# / no arm warning),
@@ -2800,6 +3058,8 @@ end
 -- sensors, handle connect/disconnect, run every tracker and the alarms.
 -- Returns the telemetry table and the link state for drawing.
 local function tick(wgt)
+  wgt.rt = wgt.rt or newRfTelemetryState(wgt)
+  rfTelemetryPump(wgt) -- decode queued frames into sensors before reading them
   local t = readTelemetry(wgt)
 
   -- Reconnect detection: if the link just came back after being down,
@@ -2815,6 +3075,7 @@ local function tick(wgt)
     resetTelemetryState(wgt)
     t = readTelemetry(wgt) -- re-read with the freshly cleared sensor cache
     bpStart(wgt)
+    wgt.battCaps, wgt.rt.capTries, wgt.rt.capAskedAt = nil, 0, nil
   end
   wgt.wasConnected = connected
 
@@ -2831,6 +3092,7 @@ local function tick(wgt)
   runAlarms(wgt, t, running, connected)
   wgt.wasRunning = running and connected
   bpUpdate(wgt, t, connected)
+  rfMspUpdate(wgt, connected)
 
   -- Track when this disconnect started, so the flight log can
   -- auto-dismiss after a timeout - this is what makes the dismiss

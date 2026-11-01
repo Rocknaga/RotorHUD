@@ -38,9 +38,32 @@ ARM 警告・フライトログ・バッテリープロファイル選択・音�
    - `-Tools` で診断ウィジェットも、`-DryRun` でコピー対象の一覧のみ
    - 追加・上書きのみで、SD 上のファイルを削除しない
    - 送信機を USB ストレージモードにするか、カードリーダーで SD を挿してから実行する
-2. 機体を接続し、Telemetry 画面で **Discover new sensors** を実行する。
-3. ラジオ側: ウィジェット画面 → 空きゾーン長押し → Add Widget → `RF Telem`。
+2. ラジオ側: ウィジェット画面 → 空きゾーン長押し → Add Widget → `RF Telem`。
    フル表示は 1 ゾーン全画面レイアウト推奨 (小さいゾーンは簡易表示に切り替わる)。
+3. **Rotorflight のカスタムテレメトリは RF Telem 自身が解読する** (下記)。Rotorflight 公式 Lua の
+   **rf2bg (スペシャルファンクション) と RfTool ウィジェットは外す**。
+4. 機体を接続すると、センサー (Gov / Hspd / Vbat / BAT# など) が自動で作られる。
+
+## Rotorflight テレメトリの内蔵デコーダー
+
+RF Telem は Rotorflight の CRSF カスタムテレメトリ (0x88) を自分で解読し、公式と同じ ID・名前で
+センサーを作る。rotorflight-lua-scripts の `rf2tlm.lua` / `rf2tlm_sensors.lua` / `MSP/crsf.lua`・`common.lua`
+を移植したもの (GPL-3.0)。
+- **rf2bg のスペシャルファンクションは不要。むしろ外すこと**: Lua の受信キューは全スクリプトで 1 本しか無く、
+  2 つのスクリプトが読むとフレームを奪い合って両方の値が欠ける。
+  外し方: Model → Special Functions → `Lua Script` で `rf2bg` を選んでいる行を削除 (または OFF)。
+  RfTool ウィジェットを画面に置いていれば、それも削除する
+- 受信を自分で持つので、**MSP の応答も受け取れる**: 接続後に `MSP_BATTERY_CONFIG` で各バッテリープロファイルの
+  容量 (mAh) を FC から読み、Battery バー (「Battery #2 5000mAh」) と選択画面に表示する
+- 公式の初期化処理にある FC への書き込み (RTC 設定・モデル名の自動設定) は移植していない
+- rf2bg を使い続けたい場合は `CONFIG.telemetry.decode = false` (このとき容量の自動取得は無効)
+- 検証: `tools/luatest/decoder_test.lua` (手組みのフレームで 15 センサーと 6 容量を照合)。**実機では未検証**
+
+## ライセンス
+
+GNU General Public License v3.0 ([LICENSE](LICENSE))。テレメトリデコーダーと MSP 処理は
+[rotorflight-lua-scripts](https://github.com/rotorflight/rotorflight-lua-scripts) (GPL-3.0) からの移植。
+音声は VOICEVOX で生成 (各キャラクターの利用規約に従う。クレジット: [docs/voicevox_script.md](docs/voicevox_script.md))。
 
 ## タッチを使う場合 (App mode レイアウト)
 
