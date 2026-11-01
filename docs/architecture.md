@@ -78,6 +78,20 @@
 - 入力: `tick` の Close スイッチ立ち上がり = `bpStep`、`refresh` のタップ/Enter = `bpChoose`、ダイヤル = `bpStep`、RTN = 閉じる
 - ARM / 切断で即終了。画面種別 `battselect` は armwarning の次、dashboard の前
 
+## 設定メニューとツールホスト (TOOLS HOST 節、`refresh` の前)
+
+- `wgt.menu = { sel }`: 全画面時、standby / dashboard で ENTER かタップ (DISARM、h ≥ 160)。`drawMenu` が
+  `MENU_ITEMS` (rf2 / elrs / batt) を描き、行の矩形を `wgt.menuRects` に置く。使えない項目は理由付きで灰色 (`menuItemState`)
+- `openMenuItem`: batt → `wgt.bp` を pick で開く。rf2 / elrs → `startRf2` / `startElrs` を pcall し `wgt.hosted = { kind, run, compiling }`
+- `startRf2`: 公式 `tool.lua` と同じ手順で、常に `ui_lcd` を返す (lcd 描画のため)。未コンパイルなら `COMPILE/compile.lua`
+  (1 フレーム 1 ファイル、終わると 1 を返す) を返し、終了時に `refresh` が開き直す
+- `refresh` 冒頭: `wgt.hosted` があれば、ARM → 閉じる / 全画面でない → 閉じる / RTN 2 回 (1 秒以内) → 閉じる /
+  それ以外は `run(event, touchState)` を呼んで return (ウィジェットの描画はしない)。0 以外が返ったら閉じる
+- `stopTool`: `wgt.hosted`・`wgt.menu` と RF2 の唯一のグローバル `rf2` を消して GC。エラーは `wgt.toolMsg` で 3 秒表示
+  (シミュレータでは /LOGS/rftelem_alarms.log にも)
+- ホスト中は `rfTelemetryPump` と `rfMspUpdate` が止まる (ツールが `crossfireTelemetryPop` の全フレームを受け取るため)。
+  `tick` (トラッカー・アラーム) は続く
+
 ## 待機画面 (`drawStandby`)
 
 - トップバーなし (画面上端から描く。時計と TX 電池は待機画面自身に表示)

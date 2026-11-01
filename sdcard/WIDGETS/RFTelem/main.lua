@@ -193,6 +193,15 @@ local CONFIG = {
     readCapacities = true, -- MSP_BATTERY_CONFIG -> per-profile mAh
   },
 
+  -- Official tools hosted full-screen inside the widget (see TOOLS HOST):
+  -- Rotorflight's own Lua (installed under /SCRIPTS/RF2/, lcd UI) and the
+  -- ExpressLRS Lua tool - the first ELRS path that exists is used.
+  tools = {
+    rf2Dir = "/SCRIPTS/RF2/",
+    elrs   = { "/SCRIPTS/TOOLS/elrs.lua", "/SCRIPTS/TOOLS/elrsV3.lua",
+               "/SCRIPTS/TOOLS/ExpressLRS.lua", "/SCRIPTS/TOOLS/ELRS.lua" },
+  },
+
   -- Battery-profile picker shown right after connecting (see BATTERY
   -- PROFILE below). Labels are free text for the 6 FC profiles, e.g.
   -- "6S 5000" - the widget only sends the profile number.
@@ -2882,6 +2891,7 @@ end
 -- CPU limit): custom telemetry -> sensors, MSP replies -> rt.onReply.
 local function rfTelemetryPump(wgt)
   if CONFIG.simulate or not CONFIG.telemetry.decode or not crossfireTelemetryPop then return end
+  if wgt.hosted then return end -- a hosted tool (RF2 / ELRS) owns the queue now
   local rt = wgt.rt
   for _ = 1, 20 do
     local cmd, data = crossfireTelemetryPop()
@@ -2909,7 +2919,7 @@ end
 -- time, retried every 1.5s, at most 6 times). Fills wgt.battCaps[1..6].
 local function rfMspUpdate(wgt, connected)
   local cfg, rt = CONFIG.telemetry, wgt.rt
-  if CONFIG.simulate or not cfg.decode or not cfg.readCapacities or not connected then return end
+  if CONFIG.simulate or not cfg.decode or not cfg.readCapacities or not connected or wgt.hosted then return end
   if wgt.battCaps or rt.capTries >= 6 then return end
   local now = getTime()
   if now < (wgt.alarm.quietUntil or 0) or now - (rt.capAskedAt or -1000) < 150 then return end
@@ -3139,6 +3149,129 @@ local function background(wgt)
   tick(wgt)
 end
 
+-- ============================== TOOLS HOST ================================
+-- The official Rotorflight (RF2) and ExpressLRS Lua tools run inside this
+-- widget while it is full-screen, opened from a small menu (ENTER or a tap
+-- on standby / dashboard, disarmed only). They are the scripts installed
+-- on the SD card, called as-is:
+--   RF2:  what /SCRIPTS/RF2/tool.lua does, but always with the lcd UI
+--         (ui_lcd.lua) because this widget draws with lcd.*; its run(event)
+--         returns 2 on exit. Editing and saving to the FC are RF2's own.
+--   ELRS: { init, run(event, touchState) }, non-zero return = exit.
+-- While a tool runs, rfTelemetryPump stands down so the tool's own
+-- crossfireTelemetryPop gets every reply. Arming, or leaving full-screen
+-- (no keys would reach the tool any more), closes it at once.
+
+local function startRf2()
+  local dir = CONFIG.tools.rf2Dir
+  local compiled = loadScript(dir .. "COMPILE/scripts_compiled.lua")
+  if not compiled then return nil, "Rotorflight Lua not found in " .. dir end
+  if chdir then chdir(dir) end -- as tool.lua; compile.lua uses relative paths
+  if compiled() then
+    assert(loadScript(dir .. "rf2.lua"))()
+    rf2.radio = rf2.executeScript("radios")
+    rf2.mspQueue = rf2.executeScript("MSP/mspQueue")
+    rf2.mspHelper = rf2.executeScript("MSP/mspHelper")
+    rf2.isTool = true
+    return rf2.executeScript("ui_lcd")
+  end
+  -- First run after installing RF2: its compile step (one file per frame,
+  -- returns 1 when done), then refresh opens it again
+  return assert(loadScript(dir .. "COMPILE/compile.lua"))(), nil, true
+end
+
+local function startElrs()
+  for _, path in ipairs(CONFIG.tools.elrs) do
+    local chunk = loadScript(path)
+    if chunk then
+      local tool = chunk()
+      if tool.init then tool.init() end
+      return tool.run
+    end
+  end
+  return nil, "ExpressLRS Lua not found in /SCRIPTS/TOOLS"
+end
+
+local function stopTool(wgt, message)
+  wgt.hosted, wgt.menu = nil, nil
+  rf2 = nil -- the RF2 scripts' only global
+  collectgarbage()
+  if message then wgt.toolMsg = { text = message, at = getTime() } end
+  if CONFIG.simulate then -- same log as the alarms (see alert)
+    pcall(function()
+      local f = io.open("/LOGS/rftelem_alarms.log", "a")
+      if f then io.write(f, string.format("%.2f tool %s\n", getTime() / 100, message or "closed")); io.close(f) end
+    end)
+  end
+end
+
+local MENU_ITEMS = {
+  { key = "rf2",  label = "Rotorflight settings" },
+  { key = "elrs", label = "ExpressLRS" },
+  { key = "batt", label = "Battery profile" },
+}
+
+-- Whether a menu item can be used now, and why not.
+local function menuItemState(wgt, t, connected, key)
+  if key == "rf2" then
+    return connected, "needs the model connected"
+  elseif key == "elrs" then
+    return crossfireTelemetryPush ~= nil and crossfireTelemetryPush() ~= nil, "no CRSF module"
+  end
+  return connected and t.battProfile ~= nil, "needs BAT# from the FC"
+end
+
+local function openMenuItem(wgt, t, connected, key)
+  local ok, why = menuItemState(wgt, t, connected, key)
+  if not ok then wgt.toolMsg = { text = "Not available: " .. why, at = getTime() }; return end
+  wgt.menu = nil
+  if key == "batt" then
+    wgt.bp = { phase = "pick", sel = t.battProfile, since = getTime() }
+    return
+  end
+  local okStart, run, err, compiling = pcall(key == "rf2" and startRf2 or startElrs)
+  if not okStart then
+    stopTool(wgt, "Could not start: " .. tostring(run))
+  elseif not run then
+    stopTool(wgt, err)
+  else
+    wgt.hosted = { kind = key, run = run, compiling = compiling }
+  end
+end
+
+-- Menu card over standby / dashboard; row rects go to wgt.menuRects.
+local function drawMenu(wgt, t, connected, w, h)
+  local mw, rowH = 460, 64
+  local mh = 56 + #MENU_ITEMS * (rowH + 8) + 40
+  local mx, my = math.floor((w - mw) / 2), math.floor((h - mh) / 2)
+  drawChamferedRect(mx, my, mw, mh, COLOR.accent, COLOR.bg, 8)
+  drawChamferedRect(mx + 2, my + 2, mw - 4, mh - 4, COLOR.panel, COLOR.accent, 7)
+  lcd.drawText(mx + 20, my + 28, "Menu", LEFT + VCENTER + MIDSIZE + COLOR.white)
+  wgt.menuRects = {}
+  for i, item in ipairs(MENU_ITEMS) do
+    local ry = my + 56 + (i - 1) * (rowH + 8)
+    local ok, why = menuItemState(wgt, t, connected, item.key)
+    local selected = (wgt.menu.sel == i)
+    wgt.menuRects[i] = { mx + 14, ry, mw - 28, rowH }
+    drawChamferedRect(mx + 14, ry, mw - 28, rowH, selected and COLOR.accentPanel or COLOR.barBg, COLOR.panel, 5)
+    if selected then lcd.drawFilledRectangle(mx + 14, ry + 6, 4, rowH - 12, COLOR.accent) end
+    lcd.drawText(mx + 32, ry + (ok and rowH / 2 or 22), item.label,
+      LEFT + VCENTER + MIDSIZE + (ok and COLOR.white or COLOR.muted))
+    if not ok then lcd.drawText(mx + 32, ry + 48, why, LEFT + VCENTER + SMLSIZE + COLOR.muted) end
+  end
+  lcd.drawText(mx + mw / 2, my + mh - 20, "Tap or ENTER to open  -  RTN to close",
+    CENTER + VCENTER + SMLSIZE + COLOR.dim)
+end
+
+-- Short status line (tool errors, "not available") for 3s.
+local function drawToolMsg(wgt, w, h)
+  local m = wgt.toolMsg
+  if not m then return end
+  if getTime() - m.at > 300 then wgt.toolMsg = nil; return end
+  drawChamferedRect(40, h - 64, w - 80, 44, COLOR.red, COLOR.bg, 6)
+  lcd.drawText(w / 2, h - 42, m.text, CENTER + VCENTER + fitFontMeasured(w - 100, 27, m.text, SMLSIZE) + COLOR.white)
+end
+
 local function refresh(wgt, event, touchState)
   -- Apply the radio-side "Theme" widget option (0/1/2), if set -
   -- reassigning the COLOR upvalue here means every helper function
@@ -3157,20 +3290,52 @@ local function refresh(wgt, event, touchState)
   local t, connected = tick(wgt)
   ensureModelImage(wgt)
   ensureTxBatteryIcons(wgt)
+  local armed = t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1
+  local w, h = wgt.zone.w, wgt.zone.h
+
+  -- A hosted tool (RF2 / ELRS) owns the screen and the keys until it
+  -- exits; arming or leaving full-screen closes it (see TOOLS HOST).
+  if wgt.hosted then
+    if armed then
+      stopTool(wgt, "Tool closed: armed")
+    elseif touchHint() then
+      stopTool(wgt)
+    elseif (event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK) and wgt.hosted.exitAt
+           and getTime() - wgt.hosted.exitAt < 100 then
+      -- RTN twice within 1s: a way out of screens the tool itself won't
+      -- leave by RTN (RF2 "Waiting for connection")
+      stopTool(wgt)
+    else
+      if event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then wgt.hosted.exitAt = getTime() end
+      local ok, ret = pcall(wgt.hosted.run, event or 0, touchState)
+      if not ok then
+        stopTool(wgt, "Tool error: " .. tostring(ret))
+      elseif ret and ret ~= 0 then
+        local reopen = wgt.hosted.compiling
+        stopTool(wgt)
+        if reopen then openMenuItem(wgt, t, connected, "rf2"); return end
+      else
+        return
+      end
+    end
+    event = 0 -- the key that closed the tool isn't for the dashboard
+  end
+  local consumed = false
 
   -- A tap or Enter while showing the flight log dismisses it, in favor of
   -- the standby screen, for the rest of this disconnect - only ever
   -- delivered when the widget is full-screen (see the FLIGHT LOG note
   -- near the top of this file). Elsewhere, the "Close" option's switch
   -- (tick()) or the timeout dismisses it instead.
-  if not connected and event and event ~= 0 and
+  if not connected and wgt.showFlightLog and event and event ~= 0 and
      (event == EVT_TOUCH_TAP or event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
-    wgt.showFlightLog = false
+    wgt.showFlightLog, consumed = false, true
   end
 
   -- Battery-profile picker, full-screen inputs: tap a tile = apply it,
   -- rotary = move, Enter = apply the highlighted one, RTN = keep current.
   if connected and wgt.bp and wgt.bp.phase == "pick" and event and event ~= 0 then
+    consumed = true
     if event == EVT_TOUCH_TAP and touchState and wgt.bpTiles then
       for i = 1, #wgt.bpTiles do
         local r = wgt.bpTiles[i]
@@ -3190,7 +3355,43 @@ local function refresh(wgt, event, touchState)
     end
   end
 
-  local w, h = wgt.zone.w, wgt.zone.h
+  -- Menu (RF2 / ELRS / battery profile): opened by ENTER or a tap on
+  -- standby or the dashboard while disarmed; full-screen only, like all
+  -- key/touch input.
+  local screen = wgt.lastScreenType
+  local menuScreen = (screen == "standby" or screen == "dashboard")
+  if wgt.menu then
+    if armed or not menuScreen then
+      wgt.menu = nil
+    elseif event and event ~= 0 and not consumed then
+      consumed = true
+      local sel = wgt.menu.sel
+      if event == EVT_VIRTUAL_NEXT then
+        wgt.menu.sel = sel % #MENU_ITEMS + 1
+      elseif event == EVT_VIRTUAL_PREV then
+        wgt.menu.sel = (sel - 2) % #MENU_ITEMS + 1
+      elseif event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK then
+        openMenuItem(wgt, t, connected, MENU_ITEMS[sel].key)
+      elseif event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then
+        wgt.menu = nil
+      elseif event == EVT_TOUCH_TAP and touchState then
+        local hit
+        for i, r in ipairs(wgt.menuRects or {}) do
+          if touchState.x >= r[1] and touchState.x < r[1] + r[3]
+             and touchState.y >= r[2] and touchState.y < r[2] + r[4] then hit = i end
+        end
+        if hit then
+          wgt.menu.sel = hit
+          openMenuItem(wgt, t, connected, MENU_ITEMS[hit].key)
+        else
+          wgt.menu = nil -- tap outside the card
+        end
+      end
+    end
+  elseif event and event ~= 0 and not consumed and not armed and menuScreen and h >= 160
+         and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK or event == EVT_TOUCH_TAP) then
+    wgt.menu = { sel = 1 }
+  end
 
   if h < 60 then
     drawSmall(wgt, t, w, h)
@@ -3198,6 +3399,8 @@ local function refresh(wgt, event, touchState)
     drawMedium(wgt, t, w, h)
   else
     drawLarge(wgt, t, w, h)
+    if wgt.menu then drawMenu(wgt, t, connected, w, h) end
+    drawToolMsg(wgt, w, h)
   end
 end
 
