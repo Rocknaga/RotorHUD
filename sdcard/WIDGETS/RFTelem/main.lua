@@ -2764,9 +2764,27 @@ local function runAlarms(wgt, t, running, connected)
 
   caution(wgt, "timer", cfg.flightTimeSec > 0 and wgt.flightSeconds >= cfg.flightTimeSec, "flight_time")
 
+  -- The battery-profile picker after a connect: the state reports (arm,
+  -- governor, rate, profile) stay quiet while it is up, and the values are
+  -- taken as known, so they aren't said once it closes either. While it
+  -- is pending (waiting for BAT#) they are held back, and said as usual if
+  -- no picker comes.
+  -- (arming closes the picker: from then on everything is said as usual)
+  local armedNow = t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1
+  local bpPhase = (wgt.bp and not armedNow) and wgt.bp.phase or nil
+  local function info(key, value, fn)
+    if bpPhase == "wait" then return end
+    if bpPhase then
+      if value ~= nil then a.prev[key] = value end
+      a.sayFirst[key] = nil
+      return
+    end
+    onChange(a, key, value, fn)
+  end
+
   -- Info. Arm state first, so right after "connected" the order is
   -- arm -> (arming blocked) -> bank -> profile.
-  onChange(a, "arm", t.armFlags and (math.floor(t.armFlags) % 2 == 1), function(armed)
+  info("arm", t.armFlags and (math.floor(t.armFlags) % 2 == 1), function(armed)
     alert(wgt, "info", armed and "armed" or "disarmed")
   end)
   -- Arming blocked (ARMD nonzero, same trigger as the arm-warning screen):
@@ -2781,14 +2799,22 @@ local function runAlarms(wgt, t, running, connected)
       for i = 1, math.min(2, #reasons) do alert(wgt, "info", reasons[i][3]) end
     end
   end)
-  onChange(a, "gov", govUpper, function(g)
+  info("gov", govUpper, function(g)
     if not GOV_CRITICAL[g] then alert(wgt, "info", GOV_VOICE[g]) end -- critical above
   end)
   -- Bank = RTE# (rates profile, the V-bar "bank"), Profile = PID#.
-  onChange(a, "bank", t.bank and math.floor(t.bank), function(b) alert(wgt, "info", "bank" .. b) end)
-  onChange(a, "pid", t.pidProfile and math.floor(t.pidProfile), function(p) alert(wgt, "info", "profile" .. p) end)
+  info("bank", t.bank and math.floor(t.bank), function(b) alert(wgt, "info", "bank" .. b) end)
+  info("pid", t.pidProfile and math.floor(t.pidProfile), function(p) alert(wgt, "info", "profile" .. p) end)
   -- Battery profile (BAT#): also how a picker change gets confirmed aloud.
-  onChange(a, "battprof", t.battProfile, function(b) alert(wgt, "info", "battprofile" .. b) end)
+  -- With the picker: the current profile isn't announced on connect (the
+  -- picker asks instead), only a change made with it.
+  if bpPhase == "wait" then
+    -- held back until the picker shows (or doesn't)
+  elseif bpPhase and a.prev.battprof == nil then
+    a.prev.battprof, a.sayFirst.battprof = t.battProfile, nil
+  else
+    onChange(a, "battprof", t.battProfile, function(b) alert(wgt, "info", "battprofile" .. b) end)
+  end
 
   -- Battery: one call per 10% step going down, rotor spinning only (the
   -- FC zeroes Bat% on disarm). "90%" is said when the charge reaches 90
@@ -4247,7 +4273,10 @@ end
 -- once per frame from the same trackers the lcd screens use. Taps go to
 -- lvgl buttons directly (also outside full screen in App mode). The lcd
 -- drawing above stays for CONFIG.lvgl = false.
-local LV = { v = {} }
+-- Outside full screen, App mode draws the EdgeTX button in the top-left
+-- corner: 62x62 px (measured in the simulator). Nothing is placed in
+-- LV.ICON x LV.ICON there; rows under it start at LV.Y1.
+local LV = { v = {}, ICON = 68, Y1 = 64 }
 local LV_LH = { [0] = 27 } -- measured line heights (FONT_SPECS)
 
 function LV.lh(font)
@@ -4366,9 +4395,10 @@ end
 -- top bar: warnings left, Menu button, date/time, signal bars, TX battery
 function LV.topBar(k, wgt, w, withMenu)
   local pad, y, h = 12, 12, 30
-  LV.rect(k, pad, y, w - pad * 2, h, COLOR.chip, 6)
-  LV.rect(k, pad + 12, y + h / 2 - 4, 8, 8, COLOR.red, nil, { visible = function() return LV.v.warn ~= "" end })
-  LV.text(k, pad + 26, y + h / 2, 360, LV.dv("warn", ""), SMLSIZE, COLOR.red)
+  local x = LV.ICON + 4 -- right of the EdgeTX button
+  LV.rect(k, x, y, w - pad - x, h, COLOR.chip, 6)
+  LV.rect(k, x + 12, y + h / 2 - 4, 8, 8, COLOR.red, nil, { visible = function() return LV.v.warn ~= "" end })
+  LV.text(k, x + 26, y + h / 2, 300, LV.dv("warn", ""), SMLSIZE, COLOR.red)
   local bx = w - pad - 12 - 44
   LV.rect(k, bx, y + 6, 40, h - 12, COLOR.dim, 3, { filled = false, thickness = 2 })
   LV.rect(k, bx + 40, y + 11, 4, h - 22, COLOR.dim)
@@ -4392,7 +4422,10 @@ end
 function LV.buildDashboard(k, wgt, w, h)
   local pad = 12
   LV.topBar(k, wgt, w, true)
-  local clusterY, clusterH = 12 + 30 + pad, math.floor(h * 0.32)
+  -- rows 8px apart; the cluster starts below the EdgeTX button
+  local gap = 8
+  local clusterY = LV.ICON
+  local clusterH = h - 20 - clusterY - gap * 3 - math.floor(h * 0.135) - math.floor(h * 0.18) - math.floor(h * 0.15)
   LV.rect(k, pad, clusterY, w - pad * 2, clusterH, COLOR.accentBorder, 8)
   LV.rect(k, pad + 1, clusterY + 1, w - pad * 2 - 2, clusterH - 2, COLOR.accentPanel, 7)
   local innerPad = 10
@@ -4416,7 +4449,7 @@ function LV.buildDashboard(k, wgt, w, h)
   LV.text(k, hx, cy, heroW, LV.dv("rpm", "--"), XXLSIZE, COLOR.white, CENTER)
   LV.text(k, hx + heroW - 40, cy + 30, 40, "rpm", SMLSIZE, COLOR.dim)
 
-  local midY, midH = clusterY + clusterH + pad, math.floor(h * 0.135)
+  local midY, midH = clusterY + clusterH + gap, math.floor(h * 0.135)
   local panelW = w - pad * 2
   LV.rect(k, pad, midY, panelW, midH, COLOR.panel, 6)
   local segW = math.floor(panelW / 4)
@@ -4430,12 +4463,12 @@ function LV.buildDashboard(k, wgt, w, h)
     LV.tab(k, sx + 4, midY + 2, sw - 8, midH - 4, tb[1], tb[2], nil, tb[3])
   end
 
-  local r3y, r3h = midY + midH + pad, math.floor(h * 0.18)
+  local r3y, r3h = midY + midH + gap, math.floor(h * 0.18)
   LV.rect(k, pad, r3y, w - pad * 2, r3h, COLOR.panel, 8)
   LV.bar(k, pad + 12, r3y + 10, w - pad * 2 - 24, r3h - 18, "battLabel", "battValue", "charge", "battColor",
     COLOR.battGood, DBLSIZE)
 
-  local r4y, r4h = r3y + r3h + pad, math.floor(h * 0.15)
+  local r4y, r4h = r3y + r3h + gap, math.floor(h * 0.15)
   local sideW = math.floor((w - pad * 3) * 0.26)
   local thrW = (w - pad * 3) - sideW
   LV.rect(k, pad, r4y, thrW, r4h, COLOR.panel, 7)
@@ -4453,31 +4486,29 @@ function LV.buildStandby(k, wgt, w, h)
   local pad, y = 12, 12
   local panelW = w - pad * 2
   local heroH = (h - pad) - y - (pad + 56 + pad + 62)
-  LV.rect(k, pad, y, panelW, heroH, COLOR.accentBorder, 8)
-  LV.rect(k, pad + 1, y + 1, panelW - 2, heroH - 2, COLOR.accentPanel, 7)
-  local half = math.floor(panelW / 2)
-  LV.text(k, pad, y + heroH / 2 - 10, half, LV.dv("hhmm", ""), XXLSIZE, COLOR.white, CENTER)
-  LV.text(k, pad, y + heroH - 34, half, LV.dv("date", ""), SMLSIZE, COLOR.dim, CENTER)
-  LV.rect(k, pad + half, y + 24, 1, heroH - 48, COLOR.muted)
+  local hx = LV.ICON + 4 -- the hero panel starts right of the EdgeTX button
+  local heroW = w - pad - hx
+  LV.rect(k, hx, y, heroW, heroH, COLOR.accentBorder, 8)
+  LV.rect(k, hx + 1, y + 1, heroW - 2, heroH - 2, COLOR.accentPanel, 7)
+  local half = math.floor(heroW / 2)
+  LV.text(k, hx, y + heroH / 2 - 10, half, LV.dv("hhmm", ""), XXLSIZE, COLOR.white, CENTER)
+  LV.text(k, hx, y + heroH - 34, half, LV.dv("date", ""), SMLSIZE, COLOR.dim, CENTER)
+  LV.rect(k, hx + half, y + 24, 1, heroH - 48, COLOR.muted)
   local imgY = y + math.floor(heroH * 0.22)
   if CONFIG.showModelImage and wgt.modelImagePath then
-    k[#k + 1] = { type = "image", file = wgt.modelImagePath, x = pad + half + math.floor((half - CONFIG.modelImageW) / 2),
+    k[#k + 1] = { type = "image", file = wgt.modelImagePath, x = hx + half + math.floor((half - CONFIG.modelImageW) / 2),
       y = imgY, w = CONFIG.modelImageW, h = CONFIG.modelImageH }
   end
-  LV.text(k, pad + half + 20, imgY + CONFIG.modelImageH + 48, half - 40, LV.dv("model", ""), DBLSIZE, COLOR.white, CENTER)
-  LV.text(k, pad + half, y + heroH - 34, half, "Model", SMLSIZE, COLOR.dim, CENTER)
+  LV.text(k, hx + half + 20, imgY + CONFIG.modelImageH + 48, half - 40, LV.dv("model", ""), DBLSIZE, COLOR.white, CENTER)
+  LV.text(k, hx + half, y + heroH - 34, half, "Model", SMLSIZE, COLOR.dim, CENTER)
 
   local sy, sh = y + heroH + pad, 56
   LV.rect(k, pad, sy, panelW, sh, COLOR.panel, 6)
-  LV.text(k, pad + 16, sy + 22, panelW / 2, LV.dv("waiting", ""), MIDSIZE, COLOR.white)
-  LV.text(k, pad + panelW / 2, sy + 22, panelW / 2 - 16, LV.dv("standbyHint", ""), SMLSIZE, COLOR.dim, RIGHT)
+  LV.text(k, pad + 16, sy + sh / 2, panelW / 2, "Waiting for connection", MIDSIZE, COLOR.white)
+  LV.text(k, pad + panelW / 2, sy + sh / 2, panelW / 2 - 16, LV.dv("standbyHint", ""), SMLSIZE, COLOR.dim, RIGHT)
   -- full screen only (a button): covers the hint, which then isn't needed
-  LV.rect(k, pad + panelW - 130, sy + 4, 126, 40, COLOR.panel, nil, { visible = function() return LV.v.full end })
-  LV.button(k, pad + panelW - 120, sy + 6, 104, 36, "Menu", function() wgt.menu = { sel = 1 } end, 0)
-  local trackX, trackW, trackY = pad + 16, panelW - 32, sy + sh - 9
-  LV.rect(k, trackX, trackY, trackW, 3, COLOR.barBg)
-  LV.rect(k, trackX, trackY, 120, 3, COLOR.accent, nil, {
-    pos = function() return trackX + math.floor((trackW - 120) * ((getTime() % 200) / 200)), trackY end })
+  LV.rect(k, pad + panelW - 130, sy + 6, 126, sh - 12, COLOR.panel, nil, { visible = function() return LV.v.full end })
+  LV.button(k, pad + panelW - 120, sy + 10, 104, sh - 20, "Menu", function() wgt.menu = { sel = 1 } end, 0)
 
   local ty, tabH = sy + sh + pad, 62
   LV.rect(k, pad, ty, panelW, tabH, COLOR.panel, 6)
@@ -4496,7 +4527,7 @@ end
 
 function LV.buildArmWarning(k, wgt, w, h, armd)
   LV.topBar(k, wgt, w, false)
-  local y = 12 + 30 + 12
+  local y = LV.Y1
   local areaH = h - y
   LV.rect(k, 2, y + 2, w - 4, areaH - 4, COLOR.red, 0, { filled = false, thickness = 6 })
   local cy = y + areaH * 0.38
@@ -4517,7 +4548,7 @@ end
 
 function LV.buildBattSelect(k, wgt, w, h)
   LV.topBar(k, wgt, w, false)
-  local pad, y = 12, 12 + 30 + 12
+  local pad, y = 12, LV.Y1
   local panelW, cfg = w - pad * 2, CONFIG.batteryProfile
   local titleH = 40
   LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
@@ -4555,7 +4586,7 @@ end
 
 function LV.buildFlightLog(k, wgt, w, h)
   LV.topBar(k, wgt, w, false)
-  local pad, y = 12, 12 + 30 + 12
+  local pad, y = 12, LV.Y1
   local panelW = w - pad * 2
   local s = wgt.samples
   local titleH = 40
@@ -4669,7 +4700,7 @@ end
 -- MSP reply in wgt.fc. Built again whenever that reply changes.
 function LV.buildFcView(k, wgt, w, h, t, parsed)
   LV.topBar(k, wgt, w, false)
-  local pad, y = 12, 12 + 30 + 12
+  local pad, y = 12, LV.Y1
   local panelW = w - pad * 2
   local page = FC.pages[wgt.infoView]
   local titleH = 44
@@ -4879,7 +4910,6 @@ function LV.update(wgt, t, screen, connected, armed)
   if screen == "standby" then
     v.hhmm = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
     v.date = dt and string.format("%04d/%02d/%02d", dt.year, dt.mon, dt.day) or ""
-    v.waiting = "Waiting for connection" .. string.rep(".", math.floor(getTime() / 50) % 4)
     v.standbyHint = touchHint() or "Power on the model"
     v.txV = txV and (fmt(txV, 1) .. "v") or "--"
     v.txPctText = txPct and (fmt(txPct, 0) .. "%") or ""
