@@ -4775,12 +4775,13 @@ end
 -- Settings (full screen only: everything here is a button). Group tabs on
 -- the left, the group's SETTINGS on the right; values save at once.
 function LV.buildSettings(k, wgt, w, h)
-  local pad, y = 12, 12
+  local pad, y = 12, 8
   local panelW = w - pad * 2
-  local titleH = 48
-  LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
-  LV.text(k, pad + 14, y + titleH / 2, 300, "Settings", MIDSIZE, COLOR.white)
-  LV.text(k, pad + 200, y + titleH / 2, 330, "Saved on the SD card (over widget options)", SMLSIZE, COLOR.dim)
+  local titleH = 52
+  local tx = LV.ICON + 4 -- right of the TOUCH badge
+  LV.rect(k, tx, y, w - pad - tx, titleH, COLOR.panel, 6)
+  LV.text(k, tx + 14, y + titleH / 2, 200, "Settings", MIDSIZE, COLOR.white)
+  LV.text(k, tx + 180, y + titleH / 2, 330, "Saved on the SD card (over widget options)", SMLSIZE, COLOR.dim)
   LV.button(k, pad + panelW - 8 - 110, y + 6, 110, titleH - 12, "Close", function() wgt.settings = nil end, 0)
   local cy = y + titleH + pad
   local ch = h - pad - cy
@@ -4866,6 +4867,19 @@ function LV.buildToolMsg(k, wgt, w, h)
   LV.text(k, 50, h - 42, w - 100, LV.dv("toolMsg", ""), SMLSIZE, COLOR.white, CENTER, { visible = vis })
 end
 
+-- Full screen = touch and keys reach the widget: a "Touch" badge where
+-- the EdgeTX button sits otherwise (top-left, same height as the top bar).
+function LV.touchBadge(k)
+  local vis = function() return LV.v.full end
+  local x, y, w, h = 12, 8, LV.ICON - 16, 52 -- left edge with the panels, 8px to the top bar
+  local cx = x + math.floor(w / 2)
+  LV.rect(k, x, y, w, h, COLOR.accent, 8, { visible = vis })
+  k[#k + 1] = { type = "circle", x = cx, y = y + 17, radius = 11, color = COLOR.white, filled = false,
+    thickness = 2, visible = vis }
+  k[#k + 1] = { type = "circle", x = cx, y = y + 17, radius = 4, color = COLOR.white, filled = true, visible = vis }
+  LV.text(k, x - 4, y + h - 11, w + 8, "Touch", SMLSIZE, COLOR.white, CENTER, { visible = vis })
+end
+
 function LV.build(wgt, screen, t, parsed)
   local w, h = wgt.zone.w, wgt.zone.h
   local k = {}
@@ -4890,7 +4904,10 @@ function LV.build(wgt, screen, t, parsed)
     LV.buildDashboard(k, wgt, w, h)
   end
   if screen == "standby" or screen == "dashboard" then LV.buildMenu(k, wgt, w, h) end
-  if screen ~= "small" then LV.buildToolMsg(k, wgt, w, h) end
+  if screen ~= "small" then
+    LV.buildToolMsg(k, wgt, w, h)
+    LV.touchBadge(k)
+  end
   if CONFIG.perfOverlay and screen ~= "small" then
     LV.text(k, w - 304, h - 10, 300, LV.dv("perf", ""), SMLSIZE, COLOR.dim, RIGHT)
   end
