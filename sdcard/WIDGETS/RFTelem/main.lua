@@ -4275,8 +4275,9 @@ end
 -- drawing above stays for CONFIG.lvgl = false.
 -- Outside full screen, App mode draws the EdgeTX button in the top-left
 -- corner: 62x62 px (measured in the simulator). Nothing is placed in
--- LV.ICON x LV.ICON there; rows under it start at LV.Y1.
-local LV = { v = {}, ICON = 68, Y1 = 64 }
+-- LV.ICON x LV.ICON there; the top bar sits beside it (y 8..60) and the
+-- rows under it start at LV.Y1.
+local LV = { v = {}, ICON = 68, Y1 = 68 }
 local LV_LH = { [0] = 27 } -- measured line heights (FONT_SPECS)
 
 function LV.lh(font)
@@ -4394,29 +4395,38 @@ end
 
 -- top bar: warnings left, Menu button, date/time, signal bars, TX battery
 function LV.topBar(k, wgt, w, withMenu)
-  local pad, y, h = 12, 12, 30
-  local x = LV.ICON + 4 -- right of the EdgeTX button
-  LV.rect(k, x, y, w - pad - x, h, COLOR.chip, 6)
-  LV.rect(k, x + 12, y + h / 2 - 4, 8, 8, COLOR.red, nil, { visible = function() return LV.v.warn ~= "" end })
-  LV.text(k, x + 26, y + h / 2, 300, LV.dv("warn", ""), SMLSIZE, COLOR.red)
-  local bx = w - pad - 12 - 44
-  LV.rect(k, bx, y + 6, 40, h - 12, COLOR.dim, 3, { filled = false, thickness = 2 })
-  LV.rect(k, bx + 40, y + 11, 4, h - 22, COLOR.dim)
-  LV.rect(k, bx + 3, y + 9, 34, h - 18, COLOR.green, 1, {
+  -- As tall as the EdgeTX button beside it (y 8..60): default-size text,
+  -- signal bars and TX battery scaled to the bar.
+  local pad, y, h = 12, 8, 52
+  local x = LV.ICON + 4
+  local cy = math.floor(y + h / 2)
+  LV.rect(k, x, y, w - pad - x, h, COLOR.chip, 8)
+  local bw, bh = 50, 26
+  local bx = w - pad - 16 - bw - 5
+  LV.rect(k, bx, cy - bh / 2, bw, bh, COLOR.dim, 4, { filled = false, thickness = 2 })
+  LV.rect(k, bx + bw, cy - 6, 5, 12, COLOR.dim)
+  LV.rect(k, bx + 4, cy - bh / 2 + 4, bw - 8, bh - 8, COLOR.green, 2, {
     color = LV.dv("txColor", COLOR.green),
-    size = function() return math.max(1, math.floor(34 * (LV.v.txPct or 0) / 100)), h - 18 end })
-  local sx = bx - 12 - 22
+    size = function() return math.max(1, math.floor((bw - 8) * (LV.v.txPct or 0) / 100)), bh - 8 end })
+  local sx = bx - 18 - 33
   for i = 1, 4 do
-    local bh = 4 + i * 4
-    LV.rect(k, sx + (i - 1) * 6, y + h - 6 - bh, 4, bh, COLOR.barBg, nil, {
+    local barH = 7 * i
+    LV.rect(k, sx + (i - 1) * 9, cy + 14 - barH, 6, barH, COLOR.barBg, nil, {
       color = function() return ((LV.v.sig or 0) >= i * 25 - 12) and COLOR.green or COLOR.barBg end })
   end
-  LV.text(k, sx - 12 - 170, y + h / 2, 170, LV.dv("clock", ""), SMLSIZE, COLOR.white, RIGHT)
+  local cw = textWidth("2026/12/31 23:59", 0) + 6
+  local clockX = sx - 18 - cw
+  LV.text(k, clockX, cy, cw, LV.dv("clock", ""), 0, COLOR.white, RIGHT)
+  local left, right = x + 16, clockX - 16
   if withMenu then
-    LV.button(k, sx - 12 - 170 - 12 - 90, y + 2, 90, h - 4, "Menu",
-      function() if not LV.v.armed then wgt.menu = { sel = 1 } end end, SMLSIZE,
+    right = right - 100
+    LV.button(k, right, y + 8, 100, h - 16, "Menu",
+      function() if not LV.v.armed then wgt.menu = { sel = 1 } end end, 0,
       { visible = function() return not LV.v.armed end })
+    right = right - 16
   end
+  LV.rect(k, left, cy - 5, 10, 10, COLOR.red, nil, { visible = function() return LV.v.warn ~= "" end })
+  LV.fitText(k, left + 18, cy, right - left - 18, "warn", "", 0, COLOR.red)
 end
 
 function LV.buildDashboard(k, wgt, w, h)
