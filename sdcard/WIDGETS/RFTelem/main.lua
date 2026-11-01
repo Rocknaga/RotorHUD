@@ -4437,8 +4437,8 @@ function LV.topBar(k, wgt, w, withMenu)
   LV.text(k, clockX, cy, cw, LV.dv("clock", ""), 0, COLOR.white, RIGHT)
   local left, right = x + 16, clockX - 16
   if withMenu then
-    right = right - 100
-    LV.button(k, right, y + 8, 100, h - 16, "Menu",
+    right = right - 130
+    LV.button(k, right, y + 4, 130, h - 8, "Menu",
       function() if not LV.v.armed then wgt.menu = { sel = 1 } end end, 0,
       { visible = function() return not LV.v.armed end })
     right = right - 16
@@ -4602,16 +4602,16 @@ function LV.buildFlightLog(k, wgt, w, h)
   local pad, y = 12, LV.Y1
   local panelW = w - pad * 2
   local s = wgt.samples
-  local titleH = 40
+  local titleH = 52
   LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
   LV.text(k, pad + 14, y + titleH / 2, 200, "Flight log", MIDSIZE, COLOR.white)
   LV.text(k, pad + 14 + 170, y + titleH / 2, 300, LV.v.model or "", SMLSIZE, COLOR.dim)
   -- outside full screen there are no buttons: the countdown shows as text
-  LV.rect(k, pad + panelW - 8 - 150, y + 5, 150, titleH - 10, COLOR.barBg, 6)
-  LV.text(k, pad + panelW - 8 - 150, y + titleH / 2, 150, LV.dv("closeText", "Close"), SMLSIZE, COLOR.white, CENTER)
-  LV.button(k, pad + panelW - 8 - 150, y + 5, 150, titleH - 10, "", function()
+  LV.rect(k, pad + panelW - 6 - 170, y + 4, 170, titleH - 8, COLOR.barBg, 6)
+  LV.text(k, pad + panelW - 6 - 170, y + titleH / 2, 170, LV.dv("closeText", "Close"), 0, COLOR.white, CENTER)
+  LV.button(k, pad + panelW - 6 - 170, y + 4, 170, titleH - 8, "", function()
     wgt.showFlightLog = false
-  end, SMLSIZE, { text = LV.dv("closeText", "Close") })
+  end, MIDSIZE, { text = LV.dv("closeText", "Close") })
 
   local stats = flightSampleStats(wgt)
   local power = "--"
@@ -4716,7 +4716,7 @@ function LV.buildFcView(k, wgt, w, h, t, parsed)
   local pad, y = 12, LV.Y1
   local panelW = w - pad * 2
   local page = FC.pages[wgt.infoView]
-  local titleH = 44
+  local titleH = 56
   LV.rect(k, pad, y, panelW, titleH, COLOR.panel, 6)
   LV.text(k, pad + 14, y + titleH / 2, 260, page.title, MIDSIZE, COLOR.white)
   local sub = ""
@@ -4726,13 +4726,13 @@ function LV.buildFcView(k, wgt, w, h, t, parsed)
   LV.text(k, pad + 270, y + titleH / 2, 270, sub, LV.fitFont(sub, 270, 0), COLOR.accent)
   LV.text(k, pad + panelW - 214, y + titleH / 2, 200, wgt.infoView .. " / " .. #FC.pages, SMLSIZE, COLOR.muted, RIGHT)
   -- full screen only (buttons): next page / close
-  LV.button(k, pad + panelW - 8 - 100 - 8 - 100, y + 6, 100, titleH - 12, "Next", function()
+  LV.button(k, pad + panelW - 6 - 130 - 8 - 130, y + 4, 130, titleH - 8, "Next", function()
     local n = (wgt.infoView or 0) + 1
     wgt.infoView = (n <= #FC.pages) and n or 1
     wgt.fc = wgt.fc or {}
     wgt.fc[FC.pages[wgt.infoView].cmd] = CONFIG.simulate and FC.sim[FC.pages[wgt.infoView].cmd] or nil
-  end, 0)
-  LV.button(k, pad + panelW - 8 - 100, y + 6, 100, titleH - 12, "Close", function() wgt.infoView = nil end, 0)
+  end, MIDSIZE)
+  LV.button(k, pad + panelW - 6 - 130, y + 4, 130, titleH - 8, "Close", function() wgt.infoView = nil end, MIDSIZE)
 
   local hintH = 36
   local cy, ch = y + titleH + pad, h - pad - hintH - pad - (y + titleH + pad)
@@ -4784,54 +4784,56 @@ function LV.buildSettings(k, wgt, w, h)
   local tx = LV.ICON + 4 -- right of the TOUCH badge
   LV.rect(k, tx, y, w - pad - tx, titleH, COLOR.panel, 6)
   LV.text(k, tx + 14, y + titleH / 2, 200, "Settings", MIDSIZE, COLOR.white)
-  LV.text(k, tx + 180, y + titleH / 2, 330, "Saved on the SD card (over widget options)", SMLSIZE, COLOR.dim)
-  LV.button(k, pad + panelW - 8 - 110, y + 6, 110, titleH - 12, "Close", function() wgt.settings = nil end, 0)
+  LV.text(k, tx + 180, y + titleH / 2, 330, "Saved on the SD card", SMLSIZE, COLOR.dim)
+  LV.button(k, pad + panelW - 8 - 140, y + 4, 140, titleH - 8, "Close", function() wgt.settings = nil end, MIDSIZE)
   local cy = y + titleH + pad
   local ch = h - pad - cy
   local tabW = 170
   LV.rect(k, pad, cy, tabW, ch, COLOR.panel, 6)
   for i, g in ipairs(SET.groups) do
-    LV.button(k, pad + 8, cy + 8 + (i - 1) * 64, tabW - 16, 56, g, function() wgt.settings.group = g end, MIDSIZE, {
+    LV.button(k, pad + 8, cy + 8 + (i - 1) * 72, tabW - 16, 64, g, function() wgt.settings.group = g end, MIDSIZE, {
       color = function() return (wgt.settings and wgt.settings.group == g) and COLOR.accent or COLOR.barBg end })
   end
   local rx, rw = pad + tabW + pad, panelW - tabW - pad
   LV.rect(k, rx, cy, rw, ch, COLOR.panel, 6)
-  local x0 = rx + 230
+  -- controls 58px tall, rows 64px apart (6 rows fit the Alarms tab)
+  local x0 = rx + 190
+  local bh = 58
   local row = 0
   for _, def in ipairs(SETTINGS) do
     if def.group == wgt.settings.group then
-      local ry = cy + 10 + row * 60
+      local ry = cy + 10 + row * 64
       row = row + 1
-      local mid = ry + 26
-      LV.text(k, rx + 16, mid, 230, def.label, 0, COLOR.white)
+      local mid = ry + bh / 2
+      LV.text(k, rx + 16, mid, 174, def.label, LV.fitFont(def.label, 170, 0), COLOR.white)
       local key = "set_" .. def.key
       if def.kind == "number" then
-        LV.button(k, x0, ry, 64, 52, "-", function() SET.set(def, SET.value(wgt, def) - def.step) end, MIDSIZE)
-        LV.text(k, x0 + 72, mid, 160, LV.dv(key, ""), MIDSIZE, COLOR.white, CENTER)
-        LV.button(k, x0 + 240, ry, 64, 52, "+", function() SET.set(def, SET.value(wgt, def) + def.step) end, MIDSIZE)
+        LV.button(k, x0, ry, 96, bh, "-", function() SET.set(def, SET.value(wgt, def) - def.step) end, MIDSIZE)
+        LV.text(k, x0 + 100, mid, 156, LV.dv(key, ""), MIDSIZE, COLOR.white, CENTER)
+        LV.button(k, x0 + 260, ry, 96, bh, "+", function() SET.set(def, SET.value(wgt, def) + def.step) end, MIDSIZE)
       elseif def.kind == "bool" then
-        LV.button(k, x0, ry, 200, 52, "", function() SET.set(def, not SET.value(wgt, def)) end, MIDSIZE, {
+        LV.button(k, x0, ry, 220, bh, "", function() SET.set(def, not SET.value(wgt, def)) end, MIDSIZE, {
           text = LV.dv(key, ""),
           color = function() return SET.value(wgt, def) and COLOR.accent or COLOR.barBg end })
         if def.test == "tones" then -- the four effects in a row
-          LV.button(k, x0 + 274, ry, 84, 52, "Test", function()
+          LV.button(k, x0 + 236, ry, 120, bh, "Test", function()
             for _, name in ipairs({ "connect", "caution", "critical", "disconnect" }) do playEffect(wgt, name, true) end
-          end, 0)
+          end, MIDSIZE)
         end
       elseif #def.choices <= 3 then
         for c, label in ipairs(def.choices) do
-          LV.button(k, x0 + (c - 1) * 108, ry, 100, 52, label, function() SET.set(def, c - 1) end, 0, {
+          LV.button(k, x0 + (c - 1) * 122, ry, 114, bh, label, function() SET.set(def, c - 1) end, 0, {
             color = function() return SET.value(wgt, def) == c - 1 and COLOR.accent or COLOR.barBg end })
         end
       else
         local n = #def.choices
-        LV.button(k, x0, ry, 64, 52, "<", function() SET.set(def, (SET.value(wgt, def) - 1) % n) end, MIDSIZE)
-        LV.text(k, x0 + 68, mid, 128, LV.dv(key, ""), 0, COLOR.white, CENTER)
-        LV.button(k, x0 + 200, ry, 64, 52, ">", function() SET.set(def, (SET.value(wgt, def) + 1) % n) end, MIDSIZE)
+        LV.button(k, x0, ry, 80, bh, "<", function() SET.set(def, (SET.value(wgt, def) - 1) % n) end, MIDSIZE)
+        LV.text(k, x0 + 84, mid, 120, LV.dv(key, ""), 0, COLOR.white, CENTER)
+        LV.button(k, x0 + 208, ry, 80, bh, ">", function() SET.set(def, (SET.value(wgt, def) + 1) % n) end, MIDSIZE)
         if def.test then
-          LV.button(k, x0 + 274, ry, 84, 52, "Test", function()
+          LV.button(k, x0 + 296, ry, 96, bh, "Test", function()
             if playFile then playFile(CONFIG.alarm.dir .. voiceSetDir(wgt) .. "/armed.wav") end
-          end, 0)
+          end, MIDSIZE)
         end
       end
     end
@@ -4847,21 +4849,23 @@ end
 
 -- menu card over standby / dashboard (Rotorflight / ExpressLRS / battery)
 function LV.buildMenu(k, wgt, w, h)
-  local mw, rowH = 460, 56
-  local mh = 56 + #MENU_ITEMS * (rowH + 8) + 56
+  -- large targets: 60px rows across a 600px card, Close in the header
+  local mw, rowH, gap = 600, 60, 8
+  local headH = 60
+  local mh = headH + #MENU_ITEMS * (rowH + gap) + 30
   local mx, my = math.floor((w - mw) / 2), math.floor((h - mh) / 2)
   local vis = function() return wgt.menu ~= nil end
   LV.rect(k, mx, my, mw, mh, COLOR.accent, 8, { visible = vis })
   LV.rect(k, mx + 2, my + 2, mw - 4, mh - 4, COLOR.panel, 7, { visible = vis })
-  LV.text(k, mx + 20, my + 28, 300, "Menu", MIDSIZE, COLOR.white, LEFT, { visible = vis })
+  LV.text(k, mx + 20, my + headH / 2 + 2, 300, "Menu", MIDSIZE, COLOR.white, LEFT, { visible = vis })
+  LV.button(k, mx + mw - 14 - 150, my + 8, 150, headH - 12, "Close", function() wgt.menu = nil end, MIDSIZE, { visible = vis })
   for i, item in ipairs(MENU_ITEMS) do
-    local ry = my + 56 + (i - 1) * (rowH + 8)
+    local ry = my + headH + (i - 1) * (rowH + gap)
     LV.button(k, mx + 14, ry, mw - 28, rowH, item.label, function()
       if wgt.menu and wgt.lastT then openMenuItem(wgt, wgt.lastT, LV.v.connected, item.key) end
     end, MIDSIZE, { visible = vis, textColor = LV.dv("menuColor" .. i, COLOR.white) })
   end
-  LV.button(k, mx + mw - 14 - 140, my + mh - 50, 140, 40, "Close", function() wgt.menu = nil end, 0, { visible = vis })
-  LV.text(k, mx + 20, my + mh - 30, mw - 200, LV.dv("menuNote", ""), SMLSIZE, COLOR.dim, LEFT, { visible = vis })
+  LV.text(k, mx + 20, my + mh - 16, mw - 40, LV.dv("menuNote", ""), SMLSIZE, COLOR.dim, LEFT, { visible = vis })
 end
 
 function LV.buildToolMsg(k, wgt, w, h)
