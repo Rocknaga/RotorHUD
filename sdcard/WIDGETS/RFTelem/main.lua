@@ -196,7 +196,7 @@ local CONFIG = {
   -- Official tools hosted full-screen inside the widget (see TOOLS HOST):
   -- Rotorflight's own Lua (installed under /SCRIPTS/RF2/, lcd UI) and the
   -- ExpressLRS Lua tool - the first ELRS path that exists is used.
-  perfOverlay = true, -- fps / ms per frame / Lua KB, bottom-right (speed check on the radio)
+  perfOverlay = false, -- fps / ms per frame / Lua KB, bottom-right (speed check; Settings > Display)
   -- lvgl widget (EdgeTX 2.11+): only what changes is redrawn - measured
   -- 12-20 fps vs 4-6 fps for the lcd drawing on the TX16S MK3 (LVGL VIEW)
   lvgl = true,
@@ -4433,7 +4433,7 @@ function LV.topBar(k, wgt, w, withMenu)
     LV.rect(k, sx + (i - 1) * 9, cy + 14 - barH, 6, barH, COLOR.barBg, nil, {
       color = function() return ((LV.v.sig or 0) >= i * 25 - 12) and COLOR.green or COLOR.barBg end })
   end
-  local cw = textWidth("2026/12/31 23:59", 0) + 6
+  local cw = textWidth("23:59", 0) + 6
   local clockX = sx - 18 - cw
   LV.text(k, clockX, cy, cw, LV.dv("clock", ""), 0, COLOR.white, RIGHT)
   local left, right = x + 16, clockX - 16
@@ -4465,15 +4465,14 @@ function LV.buildDashboard(k, wgt, w, h)
   local lx = pad + innerPad
   local y1, y2 = clusterY + innerPad, clusterY + innerPad * 2 + cellH
   local rx = lx + flankW + innerPad + heroW + innerPad
-  for _, f in ipairs({ { lx, y1, "Volt", "volt", "voltMin" }, { lx, y2, "Vcel", "vcel" },
-                       { rx, y1, "Current", "curr", "currMax" }, { rx, y2, "Bec volt", "bec", "becMin" } }) do
+  for _, f in ipairs({ { lx, y1, "Volt", "volt" }, { lx, y2, "Vcel", "vcel" },
+                       { rx, y1, "Current", "curr" }, { rx, y2, "Bec volt", "bec" } }) do
     LV.rect(k, f[1], f[2], flankW, cellH, COLOR.panel, 4)
     LV.tab(k, f[1], f[2], flankW, cellH, f[3], f[4], f[5])
   end
   local hx = lx + flankW + innerPad
   local hy, hh = clusterY + innerPad, clusterH - innerPad * 2
   LV.text(k, hx + 8, hy + TAB_LABEL_H / 2 + 1, heroW / 2, "Headspeed", SMLSIZE, COLOR.dim)
-  LV.text(k, hx + heroW / 2, hy + TAB_LABEL_H / 2 + 1, heroW / 2 - 8, LV.dv("rpmMax", ""), SMLSIZE, COLOR.muted, RIGHT)
   local cy = hy + TAB_LABEL_H + (hh - TAB_LABEL_H) / 2
   LV.text(k, hx, cy, heroW, LV.dv("rpm", "--"), XXLSIZE, COLOR.white, CENTER)
   LV.text(k, hx + heroW - 40, cy + 30, 40, "rpm", SMLSIZE, COLOR.dim)
@@ -4531,7 +4530,6 @@ function LV.buildStandby(k, wgt, w, h)
       y = imgY, w = CONFIG.modelImageW, h = CONFIG.modelImageH }
   end
   LV.text(k, pad + half + 20, imgY + CONFIG.modelImageH + 48, half - 40, LV.dv("model", ""), DBLSIZE, COLOR.white, CENTER)
-  LV.text(k, pad + half, y + heroH - 34, half, "Model", SMLSIZE, COLOR.dim, CENTER)
 
   LV.rect(k, pad, sy, panelW, sh, COLOR.panel, 6)
   LV.text(k, pad + 16, sy + sh / 2, panelW / 2, "Waiting for connection", MIDSIZE, COLOR.white)
@@ -4663,7 +4661,7 @@ function LV.buildFlightLog(k, wgt, w, h)
   for _, d in ipairs(defs) do
     LV.rect(k, lx, ly - 4, 14, 8, d.color)
     lx = lx + 20
-    local text = d.label .. (d.note and ("  " .. d.note) or "")
+    local text = d.label
     LV.text(k, lx, ly, textWidth(text, SMLSIZE) + 4, text, SMLSIZE, COLOR.dim)
     lx = lx + textWidth(text, SMLSIZE) + 26
   end
@@ -4735,8 +4733,7 @@ function LV.buildFcView(k, wgt, w, h, t, parsed)
   end, MIDSIZE)
   LV.button(k, pad + panelW - 6 - 130, y + 4, 130, titleH - 8, "Close", function() wgt.infoView = nil end, MIDSIZE)
 
-  local hintH = 36
-  local cy, ch = y + titleH + pad, h - pad - hintH - pad - (y + titleH + pad)
+  local cy, ch = y + titleH + pad, h - pad - (y + titleH + pad)
   LV.rect(k, pad, cy, panelW, ch, COLOR.panel, 6)
   if not parsed then
     LV.text(k, pad, cy + ch / 2, panelW, "Reading from the FC...", MIDSIZE, COLOR.dim, CENTER)
@@ -4770,10 +4767,6 @@ function LV.buildFcView(k, wgt, w, h, t, parsed)
       LV.tab(k, tx, ty, tileW, tileH, it[1], key)
     end
   end
-  local hy = h - pad - hintH
-  LV.rect(k, pad, hy, panelW, hintH, COLOR.panel, 6)
-  LV.text(k, pad + 14, hy + hintH / 2, panelW - 28,
-    "Read only  -  Page switch: next page  -  edit: full screen > Menu > Rotorflight settings", SMLSIZE, COLOR.dim)
 end
 
 -- Settings (full screen only: everything here is a button). Group tabs on
@@ -4785,7 +4778,6 @@ function LV.buildSettings(k, wgt, w, h)
   local tx = LV.ICON + 4 -- right of the TOUCH badge
   LV.rect(k, tx, y, w - pad - tx, titleH, COLOR.panel, 6)
   LV.text(k, tx + 14, y + titleH / 2, 200, "Settings", MIDSIZE, COLOR.white)
-  LV.text(k, tx + 180, y + titleH / 2, 330, "Saved on the SD card", SMLSIZE, COLOR.dim)
   LV.button(k, pad + panelW - 8 - 140, y + 4, 140, titleH - 8, "Close", function() wgt.settings = nil end, MIDSIZE)
   local cy = y + titleH + pad
   local ch = h - pad - cy
@@ -4853,7 +4845,7 @@ function LV.buildMenu(k, wgt, w, h)
   -- large targets: 60px rows across a 600px card, Close in the header
   local mw, rowH, gap = 600, 60, 8
   local headH = 60
-  local mh = headH + #MENU_ITEMS * (rowH + gap) + 30
+  local mh = headH + #MENU_ITEMS * (rowH + gap) + 6
   local mx, my = math.floor((w - mw) / 2), math.floor((h - mh) / 2)
   local vis = function() return wgt.menu ~= nil end
   LV.rect(k, mx, my, mw, mh, COLOR.accent, 8, { visible = vis })
@@ -4866,7 +4858,6 @@ function LV.buildMenu(k, wgt, w, h)
       if wgt.menu and wgt.lastT then openMenuItem(wgt, wgt.lastT, LV.v.connected, item.key) end
     end, MIDSIZE, { visible = vis, textColor = LV.dv("menuColor" .. i, COLOR.white) })
   end
-  LV.text(k, mx + 20, my + mh - 16, mw - 40, LV.dv("menuNote", ""), SMLSIZE, COLOR.dim, LEFT, { visible = vis })
 end
 
 function LV.buildToolMsg(k, wgt, w, h)
@@ -4943,7 +4934,7 @@ function LV.update(wgt, t, screen, connected, armed)
     return
   end
   v.txPctShort = txPct and (fmt(txPct, 0) .. "%") or "--"
-  v.clock = dt and string.format("%04d/%02d/%02d %02d:%02d", dt.year, dt.mon, dt.day, dt.hour, dt.min) or ""
+  v.clock = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
   if screen == "standby" then
     v.sig, v.warn = 0, ""
     v.hhmm = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
@@ -4960,7 +4951,7 @@ function LV.update(wgt, t, screen, connected, armed)
     elseif wgt.alarmMuted then v.alarms, v.alarmsColor = "Muted", COLOR.orange
     else v.alarms, v.alarmsColor = "On", COLOR.green end
   else
-    v.clock = dt and string.format("%04d/%02d/%02d %02d:%02d", dt.year, dt.mon, dt.day, dt.hour, dt.min) or ""
+    v.clock = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
     v.sig = t.signal or 0
     local warnings = {}
     if t.perCellVoltage and t.perCellVoltage < CONFIG.vCellWarn then
@@ -5015,7 +5006,7 @@ function LV.update(wgt, t, screen, connected, armed)
   elseif screen == "battselect" and wgt.bp then
     local bp, cfg, now = wgt.bp, CONFIG.batteryProfile, getTime()
     v.battProfile = t.battProfile
-    v.bpStatus, v.bpStatusColor = "Select before flight", COLOR.dim
+    v.bpStatus, v.bpStatusColor = "", COLOR.dim
     if bp.phase == "send" then
       v.bpStatus = "Applying " .. tostring(bp.target) .. "..."
     elseif bp.phase == "done" then
@@ -5026,13 +5017,12 @@ function LV.update(wgt, t, screen, connected, armed)
       local left = cfg.timeoutSec - math.floor((now - (bp.lastInput or bp.since)) / 100)
       if bp.stepped then
         left = cfg.applyIdleSec - math.floor((now - bp.lastInput) / 100)
-        v.bpHint = "Applies " .. bp.sel .. " in " .. math.max(0, left) .. "s  -  press again for the next"
+        v.bpHint = "Profile " .. bp.sel .. " in " .. math.max(0, left) .. "s"
       else
-        v.bpHint = (cfg.timeoutSec > 0) and ("Tap a profile, or press the Close switch to step  -  keeps current in " .. math.max(0, left) .. "s")
-          or "Tap a profile, or press the Close switch to step  -  arming keeps the current one"
+        v.bpHint = (cfg.timeoutSec > 0) and ("Tap or Close switch  -  " .. math.max(0, left) .. "s") or "Tap or Close switch"
       end
     else
-      v.bpHint = "Arming closes this screen"
+      v.bpHint = ""
     end
   elseif screen == "flightlog" then
     local remain = CONFIG.flightLogTimeoutSec
@@ -5224,7 +5214,7 @@ function LV.rf2.mainMenu()
   t.show = function(menu)
     local k = {}
     LV.rect(k, 0, 0, LCD_W, LCD_H, COLOR.bg)
-    LV.rf2.header(k, "Rotorflight settings", menu.subtitle or menu.title, function() if menu.back then menu.back() end end)
+    LV.rf2.header(k, "Rotorflight settings", nil, function() if menu.back then menu.back() end end)
     local cols, gap, th = 3, 8, 64
     local tw = math.floor((LCD_W - 24 - (cols - 1) * gap) / cols)
     local kids, texts = {}, {}
@@ -5423,7 +5413,7 @@ function LV.rf2.page()
         { text = "Cancel", press = function() t.show(page) end },
       })
     end }
-    LV.rf2.header(k, page.title, page.isReady and "Tap a value to edit" or "Reading from the FC...",
+    LV.rf2.header(k, page.title, not page.isReady and "Reading from the FC..." or nil,
       function() if page.back then page.back() end end, actions)
     saving = false
 
