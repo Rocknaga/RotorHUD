@@ -88,6 +88,9 @@ EdgeTX の lvgl ウィジェットとして描く (`CONFIG.lvgl = true`)。各�
 - ボタン (メニュー、バッテリー選択のタイル、フライトログの Close、RF2 設定) は**全画面のときだけ**出る (EdgeTX の仕様)。
   App mode で ENTER 長押し → 全画面
 - Rotorflight settings は公式 RF2 の **lvgl 版 UI** (タッチ対応の GUI) をウィジェット内で開く。RTN で戻る
+- **FC 設定の閲覧 (全画面不要)**: オプション `Page` に割り当てたスイッチを押すたびに PID ゲイン → レート →
+  ガバナープロファイル → 通常画面。読むだけで、変更は全画面の Rotorflight settings で行う。
+  メニューの View FC settings からも開ける。ARM・切断で閉じる
 - ExpressLRS ツールは lcd 描画のため lvgl 版では開けない (SYS > Tools から使う)
 - 待機画面の小さなアイコンと、画面切替のワイプ演出は lvgl 版には無い
 - `CONFIG.lvgl = false` で従来の lcd 描画に戻る (下記の RF2 カード型画面などはこちら用)
