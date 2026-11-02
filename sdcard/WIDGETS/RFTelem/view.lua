@@ -3,6 +3,7 @@
 -- frame by LV.update. Loaded by main.lua with the core module R; returns LV
 -- (also R.LV). Buttons exist only while the widget is full screen (EdgeTX).
 local R = ...
+local HIST = R.HIST
 local COLOR = setmetatable({}, { __index = function(_, k) return R.COLOR[k] end }) -- current theme
 local CONFIG, toSentenceCase, getGovColor, getChargeColor, getTxBatteryPct, ARMD_ARM_SWITCH_AT_POWERUP = R.CONFIG, R.toSentenceCase, R.getGovColor, R.getChargeColor, R.getTxBatteryPct, R.ARMD_ARM_SWITCH_AT_POWERUP
 local decodeArmd, isWhole, fmt, fmtTime, fmtUnit, SET = R.decodeArmd, R.isWhole, R.fmt, R.fmtTime, R.fmtUnit, R.SET
@@ -185,8 +186,10 @@ function LV.topBar(k, wgt, w, withMenu)
     LV.rect(k, sx + (i - 1) * 9, cy + 14 - barH, 6, barH, COLOR.barBg, nil, {
       color = function() return ((LV.v.sig or 0) >= i * 25 - 12) and COLOR.green or COLOR.barBg end })
   end
+  -- link quality (the signal sensor, RQly = %) beside the bars
+  LV.text(k, sx - 8 - 56, cy, 56, LV.dv("lq", ""), SMLSIZE, COLOR.dim, RIGHT)
   local cw = textWidth("23:59", 0) + 6
-  local clockX = sx - 18 - cw
+  local clockX = sx - 8 - 56 - 14 - cw
   LV.text(k, clockX, cy, cw, LV.dv("clock", ""), 0, COLOR.white, RIGHT)
   local left, right = x + 16, clockX - 16
   if withMenu then
@@ -225,6 +228,7 @@ function LV.buildDashboard(k, wgt, w, h)
   local hx = lx + flankW + innerPad
   local hy, hh = clusterY + innerPad, clusterH - innerPad * 2
   LV.text(k, hx + 8, hy + TAB_LABEL_H / 2 + 1, heroW / 2, "Headspeed", SMLSIZE, COLOR.dim)
+  LV.text(k, hx + heroW / 2, hy + TAB_LABEL_H / 2 + 1, heroW / 2 - 8, LV.dv("govTarget", ""), SMLSIZE, COLOR.muted, RIGHT)
   local cy = hy + TAB_LABEL_H + (hh - TAB_LABEL_H) / 2
   LV.text(k, hx, cy, heroW, LV.dv("rpm", "--"), XXLSIZE, COLOR.white, CENTER)
   LV.text(k, hx + heroW - 40, cy + 30, 40, "rpm", SMLSIZE, COLOR.dim)
@@ -343,9 +347,14 @@ function LV.buildBattSelect(k, wgt, w, h)
     LV.text(k, tx + tileW / 2, ty + 16, tileW / 2 - 12, "current", SMLSIZE, COLOR.green, RIGHT, {
       visible = function() return LV.v.battProfile == i end })
   end
+  -- pre-flight: arming, governor target, blackbox space (read after connect)
   local hy = h - pad - hintH
   LV.rect(k, pad, hy, panelW, hintH, COLOR.panel, 6)
-  LV.text(k, pad + 14, hy + hintH / 2, panelW - 28, LV.dv("bpHint", ""), SMLSIZE, COLOR.dim)
+  local cw = math.floor((panelW - 28) / 3)
+  for i, key in ipairs({ "pfArm", "pfGov", "pfBox" }) do
+    LV.text(k, pad + 14 + (i - 1) * cw, hy + hintH / 2, cw - 8, LV.dv(key, ""), SMLSIZE, COLOR.white, LEFT,
+      { color = LV.dv(key .. "Color", COLOR.white) })
+  end
 end
 
 function LV.buildFlightLog(k, wgt, w, h)
@@ -439,7 +448,7 @@ function LV.buildFlightLog(k, wgt, w, h)
     end
     local pts, idxStep = {}, n / pw
     local scale = top / (CHART_DIVS * d.step)
-    for x = 0, pw - 1, 4 do
+    for x = 0, pw - 1, 8 do -- a point every 8 px keeps the build frame light (CPU limit)
       local v = (d.series[math.floor(x * idxStep) + 1] - d.bottom) * scale
       if v < 0 then v = 0 elseif v > top then v = top end
       pts[#pts + 1] = { px + x, base - math.floor(v) }
@@ -585,6 +594,84 @@ function LV.buildSettings(k, wgt, w, h)
   end
 end
 
+-- Flight history (Menu > Flight history, full screen): this model's totals,
+-- each battery profile ("pack") used, and the last flights. Read from the
+-- stats file (core FLIGHT HISTORY) when the screen opens.
+function LV.buildHistory(k, wgt, w, h)
+  local info = model and model.getInfo and model.getInfo()
+  local name = info and info.name or "model"
+  wgt.histCache = wgt.histCache or HIST.load(name)
+  local s = wgt.histCache
+  local pad, y = 12, 8
+  local titleH = 52
+  local tx = LV.ICON + 4 -- right of the Touch badge
+  LV.rect(k, tx, y, w - pad - tx, titleH, COLOR.panel, 6)
+  LV.text(k, tx + 14, y + titleH / 2, 260, "Flight history", MIDSIZE, COLOR.white)
+  LV.text(k, tx + 280, y + titleH / 2, 220, name, SMLSIZE, COLOR.dim)
+  LV.button(k, w - pad - 4 - 140, y + 4, 140, titleH - 8, "Close", function() wgt.history = nil end, MIDSIZE)
+
+  -- totals
+  local panelW = w - pad * 2
+  local ty, th = y + titleH + pad, 64
+  LV.rect(k, pad, ty, panelW, th, COLOR.panel, 6)
+  local hrs = math.floor(s.seconds / 3600)
+  local totals = {
+    { "Flights", tostring(s.flights) },
+    { "Rotor time", string.format("%d:%02d:%02d", hrs, math.floor(s.seconds / 60) % 60, s.seconds % 60) },
+    { "Used", string.format("%.1f Ah", s.mah / 1000) },
+    { "Last flight", (s.last ~= "" and string.sub(s.last, 6)) or "--" }, -- MM/DD HH:MM
+  }
+  local segW = math.floor(panelW / 4)
+  for i, it in ipairs(totals) do
+    local key = "hist" .. i
+    LV.v[key] = it[2]
+    if i > 1 then LV.rect(k, pad + (i - 1) * segW, ty + 10, 1, th - 20, COLOR.muted) end
+    LV.tab(k, pad + (i - 1) * segW + 4, ty + 1, segW - 8, th - 2, it[1], key)
+  end
+
+  -- packs (left) and the last flights (right)
+  local cy = ty + th + pad
+  local ch = h - pad - cy
+  local lw = 330
+  local rw = panelW - lw - pad
+  LV.rect(k, pad, cy, lw, ch, COLOR.panel, 6)
+  LV.rect(k, pad + lw + pad, cy, rw, ch, COLOR.panel, 6)
+  local rowH = 34
+  local function head(x, y0, cols)
+    for _, c in ipairs(cols) do LV.text(k, x + c[1], y0, c[3], c[2], SMLSIZE, COLOR.dim, c[4] or LEFT) end
+  end
+  local px = pad + 12
+  head(px, cy + 16, { { 0, "Pack", 110 }, { 110, "Flights", 70, RIGHT }, { 180, "Used", 60, RIGHT }, { 250, "Last", 60, RIGHT } })
+  local row = 0
+  for i = 1, 6 do
+    local p = s.packs[i]
+    if p then
+      local ry = cy + 30 + row * rowH + rowH / 2
+      row = row + 1
+      local cap = wgt.battCaps and wgt.battCaps[i]
+      local label = "#" .. i .. ((cap and cap > 0) and ("  " .. cap) or "")
+      LV.text(k, px, ry, 110, label, 0, COLOR.white)
+      LV.text(k, px + 110, ry, 70, tostring(p.n), 0, COLOR.white, RIGHT)
+      LV.text(k, px + 180, ry, 60, string.format("%.1f", p.mah / 1000), 0, COLOR.white, RIGHT)
+      LV.text(k, px + 250, ry, 60, string.sub(p.last, 6, 10), SMLSIZE, COLOR.dim, RIGHT) -- MM/DD
+    end
+  end
+  if row == 0 then LV.text(k, px, cy + 30 + rowH / 2, lw - 24, "No packs yet", 0, COLOR.dim) end
+
+  local rx = pad + lw + pad + 12
+  head(rx, cy + 16, { { 0, "Date", 140 }, { 140, "Time", 64, RIGHT }, { 210, "mAh", 64, RIGHT },
+    { 280, "Max rpm", 80, RIGHT }, { 366, "Pack", 44, RIGHT } })
+  for i, r in ipairs(s.recent) do
+    local ry = cy + 30 + (i - 1) * rowH + rowH / 2
+    LV.text(k, rx, ry, 140, string.sub(r.date, 6), SMLSIZE, COLOR.white) -- MM/DD HH:MM
+    LV.text(k, rx + 140, ry, 64, fmtTime(r.sec), 0, COLOR.white, RIGHT)
+    LV.text(k, rx + 210, ry, 64, tostring(r.mah), 0, COLOR.white, RIGHT)
+    LV.text(k, rx + 280, ry, 80, tostring(r.rpm), 0, COLOR.white, RIGHT)
+    LV.text(k, rx + 366, ry, 44, r.pack and ("#" .. r.pack) or "--", 0, COLOR.dim, RIGHT)
+  end
+  if #s.recent == 0 then LV.text(k, rx, cy + 30 + rowH / 2, rw - 24, "No flights recorded yet", 0, COLOR.dim) end
+end
+
 -- small zones (not the 800x480 layout): headspeed + pack voltage
 function LV.buildSmall(k, wgt, w, h)
   LV.rect(k, 0, 0, w, h, COLOR.bg)
@@ -651,6 +738,8 @@ function LV.build(wgt, screen, t, parsed)
     LV.buildFcView(k, wgt, w, h, t, parsed)
   elseif screen == "settings" then
     LV.buildSettings(k, wgt, w, h)
+  elseif screen == "history" then
+    LV.buildHistory(k, wgt, w, h)
   else
     LV.buildDashboard(k, wgt, w, h)
   end
@@ -688,7 +777,7 @@ function LV.update(wgt, t, screen, connected, armed)
   v.txPctShort = txPct and (fmt(txPct, 0) .. "%") or "--"
   v.clock = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
   if screen == "standby" then
-    v.sig, v.warn = 0, ""
+    v.sig, v.warn, v.lq = 0, "", ""
     v.hhmm = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
     v.date = dt and string.format("%04d/%02d/%02d", dt.year, dt.mon, dt.day) or ""
     v.standbyHint = touchHint() or "Power on the model"
@@ -705,6 +794,7 @@ function LV.update(wgt, t, screen, connected, armed)
   else
     v.clock = dt and string.format("%02d:%02d", dt.hour, dt.min) or ""
     v.sig = t.signal or 0
+    v.lq = t.signal and (fmt(t.signal, 0) .. "%") or ""
     local warnings = {}
     if t.perCellVoltage and t.perCellVoltage < CONFIG.vCellWarn then
       warnings[#warnings + 1] = string.format("Low cell voltage: %.2fv", t.perCellVoltage)
@@ -733,6 +823,7 @@ function LV.update(wgt, t, screen, connected, armed)
       v.govLabel, v.gov, v.govColor = "Motor", running and "On" or "Off", running and COLOR.green or COLOR.grey
     end
     v.flight = fmtTime(wgt.flightSeconds)
+    v.govTarget = wgt.govTarget and wgt.govTarget > 0 and ("target " .. wgt.govTarget) or ""
     if t.pidProfile and t.bank then v.profile = fmt(t.pidProfile, 0) .. "/" .. fmt(t.bank, 0)
     elseif t.bank then v.profile = fmt(t.bank, 0)
     elseif t.pidProfile then v.profile = fmt(t.pidProfile, 0)
@@ -759,6 +850,16 @@ function LV.update(wgt, t, screen, connected, armed)
     local bp, cfg, now = wgt.bp, CONFIG.batteryProfile, getTime()
     v.battProfile = t.battProfile
     v.bpStatus, v.bpStatusColor = "", COLOR.dim
+    if t.armd and t.armd ~= 0 then v.pfArm, v.pfArmColor = "Arming blocked", COLOR.red
+    else v.pfArm, v.pfArmColor = "Arming OK", COLOR.green end
+    v.pfGov, v.pfGovColor = "Gov target " .. (wgt.govTarget and (wgt.govTarget .. " rpm") or "--"), COLOR.white
+    local bb = wgt.blackbox
+    if bb and bb.total and bb.total > 0 then
+      local free = math.floor((bb.total - bb.used) * 100 / bb.total)
+      v.pfBox, v.pfBoxColor = "Blackbox " .. free .. "% free", (free < 10) and COLOR.orange or COLOR.white
+    else
+      v.pfBox, v.pfBoxColor = "Blackbox --", COLOR.dim
+    end
     if bp.phase == "send" then
       v.bpStatus = "Applying " .. tostring(bp.target) .. "..."
     elseif bp.phase == "done" then
@@ -769,12 +870,10 @@ function LV.update(wgt, t, screen, connected, armed)
       local left = cfg.timeoutSec - math.floor((now - (bp.lastInput or bp.since)) / 100)
       if bp.stepped then
         left = cfg.applyIdleSec - math.floor((now - bp.lastInput) / 100)
-        v.bpHint = "Profile " .. bp.sel .. " in " .. math.max(0, left) .. "s"
+        v.bpStatus = "Profile " .. bp.sel .. " in " .. math.max(0, left) .. "s"
       else
-        v.bpHint = (cfg.timeoutSec > 0) and ("Tap or Close switch  -  " .. math.max(0, left) .. "s") or "Tap or Close switch"
+        v.bpStatus = (cfg.timeoutSec > 0) and ("Tap or Close switch  -  " .. math.max(0, left) .. "s") or "Tap or Close switch"
       end
-    else
-      v.bpHint = ""
     end
   elseif screen == "flightlog" then
     local remain = CONFIG.flightLogTimeoutSec
@@ -800,6 +899,7 @@ end
 
 function LV.screenType(wgt, t)
   if wgt.settings then return "settings" end
+  if wgt.history then return "history" end
   if not isTelemetryConnected(t) then return wgt.showFlightLog and "flightlog" or "standby" end
   if wgt.armWarningActive then return "armwarning" end
   if wgt.bp and wgt.bp.phase ~= "wait" then return "battselect" end
@@ -846,6 +946,7 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
   end
 
   if wgt.settings and (armed or not full) then wgt.settings = nil end
+  if wgt.history and (armed or not full) then wgt.history = nil end
   local screen = (h < 160) and "small" or LV.screenType(wgt, t)
   wgt.lastScreenType = screen
   if (armed or (screen ~= "standby" and screen ~= "dashboard")) then wgt.menu = nil end
@@ -882,6 +983,13 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
     sub = wgt.infoView .. ":" .. tostring(buf) .. ":" .. tostring(wgt.fcProf)
   elseif screen == "settings" then
     sub = "set:" .. wgt.settings.group
+  end
+  -- The flight log's sample statistics (up to 400 samples) get a frame of
+  -- their own before the screen is built: both in one frame came close to
+  -- EdgeTX's per-frame instruction limit on a long flight (luatest cpu).
+  if screen == "flightlog" and wgt.lvScreen ~= "flightlog" then
+    local _, fresh = flightSampleStats(wgt)
+    if fresh then return end
   end
   if wgt.lvScreen ~= screen or wgt.lvTheme ~= R.COLOR or wgt.lvW ~= w or wgt.lvH ~= h or wgt.lvFull ~= full
      or wgt.lvSub ~= sub

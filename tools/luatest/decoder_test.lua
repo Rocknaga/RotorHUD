@@ -21,6 +21,20 @@ lcd = { RGB = function() return 0 end, drawFilledRectangle = noop, drawText = no
         drawLine = noop, sizeText = function(t) return #t * 12, 27 end, loadBitmap = noop }
 Bitmap = { open = noop }
 LCD_W, LCD_H = 800, 480
+-- EdgeTX's Lua has no string methods ("s:match()" fails there, measured in
+-- the simulator): take them away here too, so such calls fail in the tests
+do
+  local meta = getmetatable("")
+  local lib = meta.__index
+  meta.__index = function(_, k)
+    local info = debug.getinfo(2, "S")
+    local src = info and info.source or ""
+    if string.find(src, "WIDGETS", 1, true) or src == "main.lua" then
+      error("string method '" .. tostring(k) .. "' used - EdgeTX's Lua has none", 2)
+    end
+    return lib[k]
+  end
+end
 lvgl = assert(load(FILES["/luatest/lvglstub.lua"], "lvglstub"))().lvgl
 loadScript = function(path)
   local src = FILES[path]

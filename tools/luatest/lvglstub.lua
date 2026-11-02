@@ -59,7 +59,8 @@ end
 
 M.lvgl = {
   clear = function() M.objs = {} end,
-  build = function(t) M.builds = M.builds + 1; walk(t, 0, 0, false) end,
+  -- the walk is C on the radio: M.inC tells the harness not to count it
+  build = function(t) M.builds = M.builds + 1; M.inC = true; walk(t, 0, 0, false); M.inC = false end,
   isFullScreen = function() return M.full end,
   isAppMode = function() return true end,
   exitFullScreen = function() M.full = false end,
@@ -68,12 +69,14 @@ M.lvgl = {
 
 -- every function property, as EdgeTX does each frame
 function M.frame()
+  M.inC = true -- the loop is C on the radio; the property functions are Lua
   for _, o in ipairs(M.objs) do
     for _, k in ipairs(FUNCS) do
       local f = o[k]
-      if type(f) == "function" and k ~= "active" then f() end
+      if type(f) == "function" and k ~= "active" then M.inC = false; f(); M.inC = true end
     end
   end
+  M.inC = false
 end
 
 -- the text a button shows now

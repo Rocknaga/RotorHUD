@@ -91,6 +91,9 @@ local CONFIG = {
   -- dismiss it sooner; this timeout is what makes the same behavior
   -- work even when the widget isn't full-screen and never gets touch
   -- events at all.
+  -- Flight history (FLIGHT HISTORY): flights shorter than this (rotor
+  -- time, s) aren't recorded
+  history = { minSec = 10 },
   flightLogTimeoutSec = 0, -- >0: back to standby after this long; 0 = stays until closed or reconnected
 
   -- Model picture in the footer's side card (/IMAGES/<model name>.png).
@@ -564,7 +567,7 @@ SET.file = "/WIDGETS/RFTelem/settings.txt"
 
 local USER = {}
 
-SET.groups = { "Voice", "Alarms", "Display" }
+SET.groups = { "Voice", "Alarms", "Flight", "Display" }
 
 local SETTINGS = {
   { key = "voice", group = "Voice", label = "Voice", kind = "choice", choices = CONFIG.alarm.voiceLabels,
@@ -595,6 +598,13 @@ local SETTINGS = {
     default = CONFIG.perfOverlay, apply = function(v) CONFIG.perfOverlay = v end },
   { key = "modelImage", group = "Display", label = "Model picture", kind = "bool",
     default = CONFIG.showModelImage, apply = function(v) CONFIG.showModelImage = v end },
+  { key = "flightTime", group = "Flight", label = "Flight time call", kind = "number", min = 0, max = 900, step = 30,
+    unit = " s", zero = "Off", default = CONFIG.alarm.flightTimeSec, apply = function(v) CONFIG.alarm.flightTimeSec = v end },
+  { key = "logClose", group = "Flight", label = "Flight log closes", kind = "number", min = 0, max = 300, step = 30,
+    unit = " s", zero = "Never", default = CONFIG.flightLogTimeoutSec, apply = function(v) CONFIG.flightLogTimeoutSec = v end },
+  { key = "pickTimeout", group = "Flight", label = "Picker keeps after", kind = "number", min = 0, max = 60, step = 5,
+    unit = " s", zero = "Never", default = CONFIG.batteryProfile.timeoutSec,
+    apply = function(v) CONFIG.batteryProfile.timeoutSec = v end },
 }
 
 -- current value: the user's, else the widget option, else the default
@@ -660,7 +670,106 @@ function SET.text(wgt, def)
   if def.kind == "bool" then return v and "On" or "Off" end
   if def.kind == "choice" then return def.choices[(v or 0) + 1] or def.choices[1] end
   if v == nil then return "--" end
+  if def.zero and v == 0 then return def.zero end
   return string.format("%." .. (def.decimals or 0) .. "f", v) .. (def.unit or "")
+end
+
+-- ============================== FLIGHT HISTORY ============================
+-- Every flight (a connect with at least CONFIG.history.minSec of rotor
+-- time) is written when the link drops: one CSV line per flight in
+-- /LOGS/RFTelem-<model>.csv, and running totals in
+-- /WIDGETS/RFTelem/stats-<model>.txt (flights, rotor time, mAh, last
+-- flight; per battery profile ("pack") the flights, mAh and last use; the
+-- last flights) for the history screen. Plain key=value lines.
+local HIST = { MAXRECENT = 6 }
+
+function HIST.name(model) return (string.gsub(model or "model", "[^%w%-_]", "_")) end
+function HIST.statsPath(model) return "/WIDGETS/RFTelem/stats-" .. HIST.name(model) .. ".txt" end
+
+function HIST.load(model)
+  local s = { flights = 0, seconds = 0, mah = 0, last = "", packs = {}, recent = {} }
+  pcall(function()
+    local f = io.open(HIST.statsPath(model), "r")
+    if not f then return end
+    local text = io.read(f, 4096) or ""
+    io.close(f)
+    for key, val in string.gmatch(text, "([%w_]+)=([^\n]*)") do
+      local pn = string.match(key, "^p(%d)$")
+      local rn = string.match(key, "^r(%d)$")
+      if pn then
+        local n, mah, last = string.match(val, "^(%d+),(%d+),(.*)$")
+        if n then s.packs[tonumber(pn)] = { n = tonumber(n), mah = tonumber(mah), last = last } end
+      elseif rn then
+        local d, sec, mah, rpm, pack = string.match(val, "^([^|]*)|(%d+)|(%d+)|(%d+)|(%d*)$")
+        if d then
+          s.recent[tonumber(rn)] = { date = d, sec = tonumber(sec), mah = tonumber(mah), rpm = tonumber(rpm),
+            pack = tonumber(pack) }
+        end
+      elseif key == "last" then
+        s.last = val
+      elseif tonumber(val) then
+        s[key] = tonumber(val)
+      end
+    end
+  end)
+  return s
+end
+
+function HIST.save(model, s)
+  pcall(function()
+    local f = io.open(HIST.statsPath(model), "w")
+    if not f then return end
+    io.write(f, "flights=", tostring(s.flights), "\n", "seconds=", tostring(s.seconds), "\n",
+      "mah=", tostring(s.mah), "\n", "last=", s.last, "\n")
+    for i = 1, 6 do
+      local p = s.packs[i]
+      if p then io.write(f, "p", tostring(i), "=", tostring(p.n), ",", tostring(p.mah), ",", p.last, "\n") end
+    end
+    for i = 1, #s.recent do
+      local r = s.recent[i]
+      io.write(f, "r", tostring(i), "=", r.date, "|", tostring(r.sec), "|", tostring(r.mah), "|",
+        tostring(r.rpm), "|", r.pack and tostring(r.pack) or "", "\n")
+    end
+    io.close(f)
+  end)
+end
+
+function HIST.record(wgt)
+  local sec = math.floor(wgt.flightSeconds or 0)
+  if sec < CONFIG.history.minSec then return end
+  local info = model and model.getInfo and model.getInfo()
+  local name = info and info.name or "model"
+  local ok, dt = pcall(getDateTime)
+  local date = (ok and dt) and string.format("%04d/%02d/%02d %02d:%02d", dt.year, dt.mon, dt.day, dt.hour, dt.min) or ""
+  local mah = math.floor(wgt.maxCapacity or 0)
+  local rpm = math.floor(wgt.maxHeadspeed or 0)
+  local pack = wgt.flightPack
+  pcall(function() -- the full record, one CSV line per flight
+    local path = "/LOGS/RFTelem-" .. HIST.name(name) .. ".csv"
+    local exists = io.open(path, "r")
+    if exists then io.close(exists) end
+    local f = io.open(path, "a")
+    if not f then return end
+    if not exists then
+      io.write(f, "date,model,pack,rotor_s,used_mah,min_charge,max_rpm,max_a,max_w,min_v,min_cell,min_bec,max_esc\n")
+    end
+    local function n(v, d) return v and string.format("%." .. (d or 0) .. "f", v) or "" end
+    io.write(f, date, ",", name, ",", pack and tostring(pack) or "", ",", tostring(sec), ",", tostring(mah), ",",
+      n(wgt.minCharge), ",", tostring(rpm), ",", n(wgt.maxCurrent, 1), ",", n(wgt.maxPower), ",",
+      n(wgt.minVoltage, 1), ",", n(wgt.minCellVoltage, 2), ",", n(wgt.minBecVoltage, 1), ",", n(wgt.maxEscTemp), "\n")
+    io.close(f)
+  end)
+  local s = HIST.load(name)
+  s.flights, s.seconds, s.mah, s.last = s.flights + 1, s.seconds + sec, s.mah + mah, date
+  if pack then
+    local p = s.packs[pack] or { n = 0, mah = 0, last = "" }
+    p.n, p.mah, p.last = p.n + 1, p.mah + mah, date
+    s.packs[pack] = p
+  end
+  table.insert(s.recent, 1, { date = date, sec = sec, mah = mah, rpm = rpm, pack = pack })
+  while #s.recent > HIST.MAXRECENT do table.remove(s.recent) end
+  HIST.save(name, s)
+  wgt.histCache = nil
 end
 
 -- ============================== WIDGET API ================================
@@ -1767,6 +1876,8 @@ FC.pages = {
 }
 
 -- RF2's simulator replies, so CONFIG.simulate shows the pages too
+FC.startup = { MSP_API_VERSION, MSP_BATTERY_CONFIG, 148, 70 }
+
 FC.sim = {
   [112] = { 70, 0, 225, 0, 90, 0, 120, 0, 100, 0, 200, 0, 70, 0, 120, 0, 100, 0, 125, 0, 83, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 25, 0 },
   [111] = { 6, 50, 40, 12, 0, 0, 0, 50, 40, 12, 0, 0, 0, 80, 50, 12, 0, 0, 0, 100, 0, 12, 0, 0, 0 },
@@ -1790,25 +1901,35 @@ local function rfMspUpdate(wgt, connected)
     return
   end
   if now < (wgt.alarm.quietUntil or 0) or now - (rt.capAskedAt or -1000) < 150 then return end
-  if not wgt.fcApi and rt.capTries < 6 then
-    if mspRequest(MSP_API_VERSION, {}) then rt.capAskedAt, rt.capTries = now, rt.capTries + 1 end
-    return
+  -- after a connect, one request at a time (each retried every 1.5 s, at
+  -- most 6 times): API version, battery capacities, governor target
+  -- headspeed (MSP_GOVERNOR_PROFILE, again when PID# changes), blackbox
+  -- space (MSP_DATAFLASH_SUMMARY)
+  local have = { [MSP_API_VERSION] = wgt.fcApi, [MSP_BATTERY_CONFIG] = wgt.battCaps or not cfg.readCapacities,
+                 [148] = wgt.govTarget, [70] = wgt.blackbox }
+  for _, cmd in ipairs(FC.startup) do
+    if not have[cmd] and (rt.tries[cmd] or 0) < 6 then
+      if mspRequest(cmd, {}) then rt.capAskedAt, rt.tries[cmd] = now, (rt.tries[cmd] or 0) + 1 end
+      return
+    end
   end
-  if not cfg.readCapacities or wgt.battCaps or rt.capTries >= 12 then return end
-  if mspRequest(MSP_BATTERY_CONFIG, {}) then rt.capAskedAt, rt.capTries = now, rt.capTries + 1 end
 end
 
 local function newRfTelemetryState(wgt)
-  local rt = { count = 0, skip = 0, capTries = 0 }
+  local rt = { count = 0, skip = 0, tries = {} }
   rt.onReply = function(cmd, buf, isError)
     if cmd == MSP_BATTERY_CONFIG and not isError then wgt.battCaps = parseBatteryConfig(buf) end
     if (cmd == 112 or cmd == 111 or cmd == 148) and not isError then
       wgt.fc = wgt.fc or {}
       wgt.fc[cmd] = buf
     end
+    if cmd == 148 and not isError and #buf >= 2 then wgt.govTarget = FC.u16(buf, 1) end
+    if cmd == 70 and not isError and #buf >= 13 then -- flags, sectors, total, used (U32 LE)
+      local function u32(i) return buf[i] + buf[i + 1] * 256 + buf[i + 2] * 65536 + buf[i + 3] * 16777216 end
+      wgt.blackbox = { supported = math.floor(buf[1] / 2) % 2 == 1, total = u32(6), used = u32(10) }
+    end
     if cmd == MSP_API_VERSION and not isError and #buf >= 3 then
       wgt.fcApi = buf[2] + buf[3] / 100 + 0.00001 -- as RF2's MSP/mspApiVersion.lua
-      rt.capTries = 0
     end
   end
   return rt
@@ -1958,18 +2079,33 @@ local function tick(wgt)
   if wgt.wasConnected and not connected then
     -- Just disconnected after a real connection (not the initial
     -- power-up state) - that's the one moment the flight log should
-    -- show fresh.
+    -- show fresh, and the flight goes into the history.
     wgt.showFlightLog = true
+    HIST.record(wgt)
   end
   if connected and not wgt.wasConnected then
     resetTelemetryState(wgt)
     t = readTelemetry(wgt) -- re-read with the freshly cleared sensor cache
     bpStart(wgt)
-    wgt.battCaps, wgt.fcApi, wgt.rt.capTries, wgt.rt.capAskedAt = nil, nil, 0, nil
+    wgt.battCaps, wgt.fcApi, wgt.rt.tries, wgt.rt.capAskedAt = nil, nil, {}, nil
+    wgt.govTarget, wgt.blackbox, wgt.flightPack, wgt.lastPid = nil, nil, nil, nil
   end
   wgt.wasConnected = connected
 
+  if connected then
+    if wgt.lastPid ~= nil and t.pidProfile ~= wgt.lastPid then -- the target is per PID profile
+      wgt.govTarget = nil
+      if wgt.rt.tries then wgt.rt.tries[148] = nil end
+    end
+    wgt.lastPid = t.pidProfile
+    if CONFIG.simulate then
+      wgt.govTarget = wgt.govTarget or 2100
+      wgt.blackbox = wgt.blackbox or { supported = true, total = 4194304, used = 1048576 }
+    end
+  end
+
   local running = updateFlightTimer(wgt, t)
+  if running and t.battProfile then wgt.flightPack = t.battProfile end
   updateMaxCurrent(wgt, t, running)
   updateMinVoltage(wgt, t, running)
   updateMinBecVoltage(wgt, t, running)
@@ -2108,6 +2244,7 @@ local MENU_ITEMS = {
   { key = "rf2",  label = "Rotorflight settings" },
   { key = "batt", label = "Battery profile" },
   { key = "view", label = "View FC settings" },
+  { key = "history", label = "Flight history" },
   { key = "settings", label = "Settings" },
 }
 
@@ -2115,7 +2252,7 @@ local MENU_ITEMS = {
 local function menuItemState(wgt, t, connected, key)
   if key == "rf2" then
     return connected, "needs the model connected"
-  elseif key == "settings" then
+  elseif key == "settings" or key == "history" then
     return true, ""
   elseif key == "view" then
     return connected, "needs the model connected"
@@ -2133,6 +2270,10 @@ local function openMenuItem(wgt, t, connected, key)
   end
   if key == "settings" then
     wgt.settings = { group = SET.groups[1] }
+    return
+  end
+  if key == "history" then
+    wgt.history, wgt.histCache = true, nil
     return
   end
   if key == "view" then
@@ -2186,6 +2327,7 @@ end
 -- ============================== EXPORTS ===================================
 
 R.COLOR = COLOR
+R.HIST = HIST
 R.create, R.update, R.refresh, R.background = create, update, refresh, background
 R.ARMD_ARM_SWITCH_AT_POWERUP = ARMD_ARM_SWITCH_AT_POWERUP
 R.CHART_DIVS = CHART_DIVS

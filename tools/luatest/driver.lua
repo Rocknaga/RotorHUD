@@ -68,11 +68,45 @@ if opts.cpu then
 end
 Bitmap = { open = function() return nil end }
 LCD_W, LCD_H = 800, 480
+-- EdgeTX's Lua has no string methods ("s:match()" fails there, measured in
+-- the simulator): take them away here too, so such calls fail in the tests
+do
+  local meta = getmetatable("")
+  local lib = meta.__index
+  meta.__index = function(_, k)
+    local info = debug.getinfo(2, "S")
+    local src = info and info.source or ""
+    if string.find(src, "WIDGETS", 1, true) or src == "main.lua" then
+      error("string method '" .. tostring(k) .. "' used - EdgeTX's Lua has none", 2)
+    end
+    return lib[k]
+  end
+end
 LVSTUB = assert(load(FILES["/luatest/lvglstub.lua"], "lvglstub"))()
 lvgl = LVSTUB.lvgl
 LVSTUB.full = opts.full or opts.ui or false
 local tones = 0
 playTone = function() tones = tones + 1 end
+-- EdgeTX-style io (io.open/io.write(f, ...)/io.read(f, n)/io.close(f)) on an
+-- in-memory file system, so settings, history and logs can be checked
+MEMFS = {}
+io = {
+  open = function(path, mode)
+    mode = mode or "r"
+    if mode == "r" and not MEMFS[path] then return nil end
+    if mode == "w" or not MEMFS[path] then MEMFS[path] = "" end
+    return { path = path, pos = 1 }
+  end,
+  write = function(f, ...)
+    for _, v in ipairs({ ... }) do MEMFS[f.path] = MEMFS[f.path] .. tostring(v) end
+  end,
+  read = function(f, n)
+    local s = MEMFS[f.path]:sub(f.pos, f.pos + n - 1)
+    f.pos = f.pos + #s
+    return s
+  end,
+  close = function() end,
+}
 -- loadScript: the widget folder's files (with the patches below applied)
 loadScript = function(path)
   local s = FILES[path]
@@ -168,14 +202,15 @@ wgtRef = wgt
 -- past a fixed instruction budget). Counted in blocks of 100 via a hook;
 -- the max per screen type is printed at the end.
 local instr, maxInstr, lastInstr = 0, {}, {}
-debug.sethook(function() instr = instr + 100 end, "", 100)
+debug.sethook(function() if not LVSTUB.inC then instr = instr + 100 end end, "", 100)
 
 -- "ui": taps (full screen) at fixed times; each must find its button
 local UI_STEPS = {
   { 100, "Menu" }, { 120, "Settings" }, { 140, "Alarms" }, { 150, "+" }, { 160, "Display" },
-  { 170, "Mono" }, { 180, "Color" }, { 190, "Voice" }, { 200, "Close" },
+  { 170, "Mono" }, { 180, "Color" }, { 185, "Flight" }, { 187, "+" }, { 190, "Voice" }, { 200, "Close" },
   { 7320, "Menu" }, { 7340, "View FC settings" }, { 7360, "Next" }, { 7380, "Next" }, { 7400, "Close" },
   { 7700, "Close" },
+  { 7900, "Menu" }, { 7920, "Flight history" }, { 8000, "Close" },
 }
 local uiDone = {}
 function UI(now)
@@ -184,6 +219,7 @@ function UI(now)
       uiDone[i] = true
       local ok = LVSTUB.press(s[2])
       print(string.format("TAP %-18s %s  (screen %s)", s[2], ok and "ok" or "NOT FOUND", tostring(wgt.lastScreenType)))
+      if s[2] == "Flight history" then UI_SHOW = now + 10 end
     end
   end
 end
@@ -207,6 +243,13 @@ for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
     widget.refresh(wgt, 0, nil)
     LVSTUB.frame()
     if opts.ui then UI(NOW) end
+    if UI_SHOW and NOW >= UI_SHOW then
+      UI_SHOW = nil
+      local shown = table.concat(LVSTUB.texts(), " | ")
+      print("SHOWN " .. shown)
+      -- the flight that ended at 75s must be in the history
+      if not string.find(shown, "Flights | 1 |", 1, true) then print("CHECK FAIL: flight history not recorded/read") end
+    end
     local st = wgt.lastScreenType or "?"
     if instr > (maxInstr[st] or 0) then maxInstr[st] = instr end
     lastInstr[st] = instr
@@ -219,6 +262,7 @@ end
 debug.sethook()
 oprint(string.format("haptic pulses: %d, tones: %d, draw calls: %d, lvgl builds: %d", haptics, tones, draws, LVSTUB.builds))
 for _, s in ipairs(LVSTUB.issues) do oprint("LVGL " .. s) end
+if opts.files then for path, body in pairs(MEMFS) do oprint("FILE " .. path); oprint(body) end end
 -- Includes the stubs' own Lua (real lcd.* calls are C), so read these as
 -- relative numbers between versions, not as the radio's real count.
 for st, n in pairs(maxInstr) do
