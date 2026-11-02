@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Copies the contents of sdcard\ (and optionally tools\*\sdcard\) onto the
   radio's SD card, keeping the folder structure (WIDGETS\..., IMAGES\...).
@@ -85,6 +85,15 @@ foreach ($src in $sources) {
             Write-Host "copied  $rel"
         }
         $script:count++
+    }
+}
+
+# EdgeTX caches compiled scripts as .luac next to the .lua; drop the
+# widget's so the radio compiles the files just copied.
+if (-not $DryRun) {
+    $widgetDir = Join-Path $Target 'WIDGETS\RFTelem'
+    if (Test-Path -LiteralPath $widgetDir) {
+        Get-ChildItem -LiteralPath $widgetDir -Filter '*.luac' | Remove-Item -Force
     }
 }
 

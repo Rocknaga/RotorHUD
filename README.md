@@ -14,8 +14,8 @@ ARM 警告・フライトログ・バッテリープロファイル選択・音�
   `ARMD` ≠ 0 で全画面の ARM 警告、切断後はフライトログ。切替時はワイプ演出
 - **再接続で全リセット**: 最大・最小値とフライトタイマーを初期化してから表示
 - **接続直後のバッテリープロファイル選択**: FC の 6 プロファイルから選んで送信 (実機の FC では未検証)
-- **設定メニュー**: 全画面時に ENTER/タップで Rotorflight 設定 (公式 RF2 ツール)・ExpressLRS・バッテリープロファイルを
-  ウィジェット内で開く (DISARM 中のみ)
+- **メニュー** (全画面時、DISARM 中): Rotorflight 設定 (タッチ対応の RF Telem 調画面)、バッテリープロファイル、
+  FC 設定の閲覧、飛行履歴、Settings
 - **アラーム (音声 + 振動)**: 危険 / 注意 / 情報の 3 段階。声は VOICEVOX 由来の 6 種から選択
 - **3 テーマ** (color / mono / cyan) と、機体名と同名の PNG による機体画像表示
 - **検証環境**: EdgeTX Companion シミュレータ用スクリプトと、画面なしのテスト (`tools/luatest`) を同梱
@@ -28,12 +28,12 @@ ARM 警告・フライトログ・バッテリープロファイル選択・音�
 | 対象ファームウェア | EdgeTX v2.12.0 "Queen Anne's Revenge" (edgetx-tx16smk3) |
 | 通信 | CRSF / ExpressLRS |
 | FC | Rotorflight (センサー名は後述) |
-| ウィジェット名 | `RF Telem` (`/WIDGETS/RFTelem/main.lua`) |
+| ウィジェット名 | `RF Telem` (`/WIDGETS/RFTelem/`: main.lua・core.lua・view.lua・rf2ui.lua) |
 
 ## インストール
 
 1. `sdcard/` の中身を、送信機の SD カードのルートへコピーする
-   (`WIDGETS/RFTelem/main.lua`、`IMAGES/`、`SOUNDS/` がそれぞれ対応する)。
+   (`WIDGETS/RFTelem/` の 4 ファイル、`IMAGES/`、`SOUNDS/` がそれぞれ対応する)。
    Windows では、手動コピーのかわりに `scripts/deploy.ps1` が使える:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Target E:\`
    - `-Target` は SD のルート。`auto` なら、EdgeTX の SD カードらしいリムーバブルドライブを自動検出する
@@ -81,68 +81,72 @@ EdgeTX 2.12 の **App mode** レイアウトを使うと、Enter 長押しだけ
 - 左上の EdgeTX アイコンは、App mode で**全画面でないとき**に EdgeTX 本体が出すもので、設定では消せない
   (EdgeTX 2.12 のソース `view_main.cpp` で確認)。全画面にすると消える
 
-## 描画方式 (lvgl)
+## 描画方式とファイル構成
 
-EdgeTX の lvgl ウィジェットとして描く (`CONFIG.lvgl = true`)。各画面を 1 回組み立て、変わった値だけを再描画する。
-実機の計測 (tools/diagtest の DrawBench / LvglBench) で、従来の lcd 描画 4〜6fps に対し lvgl は 12〜20fps。
-- ボタン (メニュー、バッテリー選択のタイル、フライトログの Close、RF2 設定) は**全画面のときだけ**出る (EdgeTX の仕様)。
-  App mode で ENTER 長押し → 全画面
-- Rotorflight settings は公式 RF2 の **lvgl 版 UI** (タッチ対応の GUI) をウィジェット内で開く。RTN で戻る
-- **FC 設定の閲覧 (全画面不要)**: オプション `Page` に割り当てたスイッチを押すたびに PID ゲイン → レート →
-  ガバナープロファイル → 通常画面。読むだけで、変更は全画面の Rotorflight settings で行う。
-  メニューの View FC settings からも開ける。ARM・切断で閉じる
-- **Settings (Menu > Settings、全画面)**: 音声 (声の選択と試聴、アラーム On/Off、振動 On/Off)、アラームのしきい値
-  (着陸指示 %、セル電圧 注意/危険、ESC 温度 注意/危険、BEC)、表示 (テーマ、fps 表示、機体画像) をタッチで変更。
-  SD の `/WIDGETS/RFTelem/settings.txt` に保存され、ウィジェットオプションの同じ項目より優先される。
-  待機画面にも Menu ボタン (全画面時) があり、未接続でも Settings を開ける
-- **Rotorflight settings は RFTelem の見た目**: 公式 RF2 の画面部品だけを差し替え (読み書き・保存は RF2)。
-  メインメニューはタイル、各ページはカード/表のタイル (指で縦スクロール)。値をタップ → 下から編集パネル
-  (スライダー、-10 -1 +1 +10、OK / Cancel。選択肢はボタンを並べて 1 タップ)。上部に Back / Save / Menu (Reload・Reboot FC)。
-  Save 後、FC への書き込みが済むと緑の「Saved to the FC」を 2.5 秒表示し確認音 (書き込み中はボタンが Saving)。
-  ARM 中などで保存できない時は RF2 の警告が出て、Saved は出ない。
-  `CONFIG.tools.rf2Skin = false` で RF2 公式の画面
-- ExpressLRS ツールは lcd 描画のため lvgl 版では開けない (SYS > Tools から使う)
-- 待機画面の小さなアイコンと、画面切替のワイプ演出は lvgl 版には無い
-- `CONFIG.lvgl = false` で従来の lcd 描画に戻る (下記の RF2 カード型画面などはこちら用)
+EdgeTX の lvgl ウィジェット (EdgeTX 2.11 以降)。各画面を 1 回組み立て、変わった値だけを再描画する。
+実機の計測 (tools/diagtest の DrawBench / LvglBench) で、旧 lcd 描画 4〜6fps に対し 12〜20fps (実機ダッシュボード 16.5fps)。
 
-## 設定メニュー (Rotorflight / ExpressLRS / バッテリープロファイル)
-
-全画面表示中、待機画面かダッシュボードで **ENTER (またはタップ)** → メニュー。ダイヤルで選び ENTER (またはタップ)、RTN で閉じる。
-**ARM 中は開けない**。ツール使用中に ARM するとその場で閉じる (全画面を抜けたときも閉じる)。
-
-| 項目 | 中身 | 使える条件 |
+| ファイル | 中身 | 読み込み |
 |---|---|---|
-| Rotorflight settings | SD にある**公式 Rotorflight Lua (RF2) の設定ツール**をそのままウィジェット内で動かす。全ページの編集と FC への保存は RF2 の機能 | 機体と接続中 |
-| ExpressLRS | SD にある **ELRS Lua** (`/SCRIPTS/TOOLS/elrs.lua` など `CONFIG.tools.elrs` の候補) をそのまま動かす。全項目 | CRSF モジュールあり |
-| Battery profile | 接続直後と同じプロファイル選択画面 | 接続中で `BAT#` あり |
+| `main.lua` | 名前・オプションだけの入口 | EdgeTX 起動時 (全ウィジェット分が読まれるので小さく保つ) |
+| `core.lua` | 設定・テレメトリ (内蔵デコーダー、MSP)・アラーム・バッテリー選択・履歴・メニュー | ウィジェット作成時 |
+| `view.lua` | 画面 | ウィジェット作成時 |
+| `rf2ui.lua` | Rotorflight settings の画面 | 初めて開いたとき |
 
-- 必要なもの: rotorflight-lua-scripts の**一式** (`SCRIPTS/RF2`・`SCRIPTS/TOOLS/rf2.lua`・`SCRIPTS/FUNCTIONS/rf2bg.lua`・
-  `WIDGETS/RfStats`・`WIDGETS/RfTool`) が SD にあること (ファイルとして置くだけ。rf2bg のスペシャルファンクションと
-  RfTool ウィジェットは**使わない**)。初回は RF2 のコンパイル画面が出て、終わると自動で開き直す
-- **RF2 の画面は RF Telem のテーマとタッチ操作に差し替えている** (`CONFIG.tools.rf2Skin = true`)。
-  RF2 の lcd 版の描画部分 (メインメニュー・ページ・ポップアップ・メッセージ・待機表示) だけを置き換え、
-  値の読み書き・保存・再起動は RF2 の処理のまま。lvgl 版は使えない (ウィジェットは lcd 描画か lvgl のどちらかに固定、
-  EdgeTX 2.12 `lua_widget.cpp` で確認)
-  - タイトル帯: `< Back` (戻る) / `<` `>` (前後のページ) / `Menu` (Save・Reload・Reboot・Acc Cal)
-  - メインメニュー: ページ一覧を 3 列のタイルで表示。タップで開く
-  - ページは**カード型**: RF2 の見出しごとにカード、各項目は「ラベル + 大きな値」のタイル (3 列、ダッシュボードと同じ書式)。
-    PID Gains / Rates などの表は、列見出し・行見出し付きの格子。値が読み込まれるまでタイトル下に走る帯
-  - 値をタップ → 下に編集パネル: 名前・値・範囲、**スライダー** (タップ/ドラッグ)、`-10` `-1` `+1` `+10`、`OK`。
-    選択肢が 6 個以下の項目は選択肢ボタン。ダイヤルでも変えられる。パネル外のタップでも確定。
-    **変えたら `Menu` → `Save` で FC に保存**
-  - 長いページは上下スワイプかダイヤルでスクロール
-  - 速さ対策: 接続中に API バージョンを先に読んでおき、RF2 起動時の待ちを省く。MSP の処理を 1 フレーム 2 回
-  - 右下の fps はフレームレート (速さの確認用、`CONFIG.tools.rf2Fps = false` で消す)
-  - `rf2Skin = false` で RF2 本来の lcd 画面に戻せる
-- 閉じ方: 各ツールの RTN (RF2 はメインメニューで RTN)。RF2 の「Waiting for connection」のように RTN が効かない画面では
-  **RTN を 1 秒以内に 2 回**で強制的に閉じる
-- ツール使用中は内蔵デコーダーが受信を止める (ツールが応答を受け取るため)。その間ダッシュボードの値は更新されないが、
-  アラームの判定は続く (センサー値は止まっている)
-- シミュレータで確認済み: メニュー表示 → RF2 の初回コンパイル → 自動で開き直し → RTN 2 回で閉じる。
-  差し替え画面はシミュレータ (RF2 の擬似応答) で、タイル → ページ → タップで編集 → ±・OK → Menu → Save まで操作。
-  実機 (2026-11-01) では差し替え前の RF2 が FC と通信してメインメニューまで表示された。
-  シミュレータには CRSF モジュールが無いため、**RF2 の FC との通信・編集・保存と ELRS ツールは未検証**。
-  実機での Lua メモリ量も未確認
+- ボタン (メニュー、Settings、バッテリー選択のタイル、フライトログの Close、RF2 設定) は**全画面のときだけ**出る
+  (EdgeTX の仕様)。App mode で ENTER 長押し → 全画面。全画面のときは左上に青い Touch バッジ
+
+## メニュー (全画面時、DISARM のみ)
+
+待機画面かダッシュボードのトップバーの **Menu** (または ENTER)。ARM するとメニューと開いている画面は閉じる。
+
+| 項目 | 中身 |
+|---|---|
+| Rotorflight settings | 公式 RF2 の設定ツールをウィジェット内で動かし、画面を RF Telem 調にしたもの (下記)。接続中のみ |
+| Battery profile | 接続直後と同じプロファイル選択画面。接続中で `BAT#` があるとき |
+| View FC settings | PID ゲイン / レート / ガバナープロファイルの閲覧 (下記)。接続中のみ |
+| Flight history | この機体の飛行履歴 (下記) |
+| Settings | 音声・アラーム・飛行・表示の設定 (下記) |
+
+### Rotorflight settings
+- SD に rotorflight-lua-scripts の**一式** (`SCRIPTS/RF2`・`SCRIPTS/TOOLS/rf2.lua`・`SCRIPTS/FUNCTIONS/rf2bg.lua`・
+  `WIDGETS/RfStats`・`WIDGETS/RfTool`) が必要 (置くだけ。rf2bg のスペシャルファンクションと RfTool ウィジェットは使わない)。
+  初回は RF2 のコンパイルが走り、終わると自動で開き直す
+- 公式 RF2 (lvgl 版) の画面部品だけを差し替え (`rf2ui.lua`)。値の読み書き・保存・再起動は RF2 の処理のまま
+- メインメニューはタイル、各ページはカード/表のタイル (指で縦スクロール)。値をタップ → 下から編集パネル
+  (スライダー、-10 -1 +1 +10、OK / Cancel。選択肢はボタンを並べて 1 タップ)。上部に Back / Save / Menu (Reload・Reboot FC)
+- Save 後、FC への書き込みが済むと緑の「Saved to the FC」を 2.5 秒 + 確認音 + 振動 2 回 (書き込み中はボタンが Saving)。
+  ARM 中などで保存できない時は RF2 の警告が出て、Saved は出ない (実機確認済み)
+- `CONFIG.tools.rf2Skin = false` で RF2 公式の画面。RTN でも戻れる
+- ExpressLRS の Lua ツールは lcd 描画のためウィジェット内では開けない (SYS > Tools から使う)
+
+### FC 設定の閲覧 (全画面不要)
+- オプション `Page` に割り当てたスイッチを押すたびに PID ゲイン → レート → ガバナープロファイル → 通常画面
+  (メニューの View FC settings からも)。読むだけ。変更は Rotorflight settings
+- 閲覧中にスイッチで PID / レートのプロファイルを切り替えると、そのプロファイルの値を読み直す。ARM・切断で閉じる
+
+### Flight history
+- 飛行ごと (ローター回転 10 秒以上、`CONFIG.history.minSec`) に、切断の時点で記録する
+  - `/LOGS/RFTelem-<機体名>.csv`: 1 飛行 1 行 (日時、パック、ローター時間、消費 mAh、残量、最大 rpm・A・W、最低電圧・セル・BEC、最高 ESC 温度)
+  - `/WIDGETS/RFTelem/stats-<機体名>.txt`: 合計 (回数・ローター時間・mAh・最終日時)、パック (バッテリープロファイル) ごとの回数・mAh・最終使用、直近 6 飛行
+- 画面: 合計 4 項目、パックごとの表、直近の飛行の表
+
+### Settings
+SD の `/WIDGETS/RFTelem/settings.txt` に保存。ウィジェットオプションの同じ項目 (Theme / Voice / BattLand) より優先。
+
+| タブ | 項目 |
+|---|---|
+| Voice | 声 (試聴付き)、アラーム On/Off、振動 On/Off、効果音 On/Off (試聴付き) |
+| Alarms | 着陸指示 %、セル電圧 注意/危険、ESC 温度 注意/危険、BEC |
+| Flight | 飛行時間の読み上げ、フライトログを閉じるまでの秒数、バッテリー選択を現状のまま閉じるまでの秒数 (0 = しない) |
+| Display | テーマ、fps 表示、機体画像 |
+
+追加するときは `core.lua` の `SETTINGS` に 1 行 (必要なら `SET.groups` にタブ)。
+
+## 画面の補足
+- トップバー: 警告、時刻、リンク品質 (RQly の %)、電波バー、TX 電池 (中に残量 %)
+- ダッシュボードの Headspeed の右上に、FC のガバナー目標ヘッドスピード (`target 2100`、MSP_GOVERNOR_PROFILE。PID プロファイルが変わると読み直し)
+- バッテリー選択画面の下段は飛行前チェック: ARM 可否、ガバナー目標、ブラックボックスの空き (MSP_DATAFLASH_SUMMARY、10% 未満でオレンジ)
 
 ## バッテリープロファイル選択 (接続直後)
 
@@ -173,7 +177,7 @@ EdgeTX の lvgl ウィジェットとして描く (`CONFIG.lvgl = true`)。各�
 - **効果音** (playTone): 接続 (上がる2音) / 切断 (下がる2音) / 注意 (2回) / 危険 (高い3連) を音声の前に鳴らす。
   Settings > Voice > Sound effects で On/Off と試聴 (Test)。Mute スイッチで音声と一緒に消える。音の高さ・長さは CONFIG.alarm.toneEffects
 
-`main.lua` の ALARMS と `CONFIG.alarm`。画面に出ていない間も `background()` から判定する。
+`core.lua` の ALARMS と `CONFIG.alarm`。画面に出ていない間も `background()` から判定する。
 
 | 段階 | 振動 | 音声 | 項目 |
 |---|---|---|---|
@@ -193,7 +197,7 @@ EdgeTX の lvgl ウィジェットとして描く (`CONFIG.lvgl = true`)。各�
 
 ## 設定
 
-**コード側** — `main.lua` 冒頭の `CONFIG`
+**コード側** — `core.lua` 冒頭の `CONFIG`
 
 | キー | 既定 | 内容 |
 |---|---|---|
@@ -244,7 +248,7 @@ EdgeTX の lvgl ウィジェットとして描く (`CONFIG.lvgl = true`)。各�
 
 ### VS Code
 
-`sdcard/WIDGETS/RFTelem/main.lua` を編集する。拡張機能 `sumneko.lua` を入れると、
+`sdcard/WIDGETS/RFTelem/` の core.lua / view.lua / rf2ui.lua を編集する。拡張機能 `sumneko.lua` を入れると、
 `.luarc.json` と `types/edgetx.lua` により EdgeTX API の補完・型チェックが効く。
 
 `.vscode/tasks.json` がある場合は、`Ctrl+Shift+B` → **Deploy to SD card** → SD のドライブ (`E:\` など) または `auto` を入力すると SD へ反映できる。
@@ -263,7 +267,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sim-capture.ps1 -Cou
 ```
 
 - `sim.ps1` は `sdcard\` を `sim\sdcard` にコピーし、**コピー側だけ** `CONFIG.simulate = true` にする
-  (`sdcard\` の main.lua は false のまま)。Companion に「RFTelem Sim (TX16S MK3)」プロファイルも作る。
+  (`sdcard\` の core.lua は false のまま)。Companion に「RFTelem Sim (TX16S MK3)」プロファイルも作る。
 - `simulate = true` のとき、`readTelemetry` は `simulateTelemetry` のシナリオ値を返す
   (standby → armwarning → スプールアップ → 飛行 → 低電圧・ESC 高温 → THR-OFF → DISARM → flightlog)。
 - `sim-capture.ps1` はシミュレータのカメラボタン (LCD をクリップボードへコピー) をクリックする。
@@ -276,20 +280,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sim-capture.ps1 -Cou
 ```
 RFTelem/
 ├─ sdcard/                      SD カードのルートと同じ構造 (deploy でそのままコピーされる)
-│  ├─ WIDGETS/RFTelem/main.lua  ウィジェット本体
-│  └─ IMAGES/txbatt_{10,25,50,75,100}.png   トップバーの TX 電池アイコン (45×22)
+│  ├─ WIDGETS/RFTelem/          ウィジェット (main.lua 入口 / core.lua / view.lua / rf2ui.lua)
+│  ├─ IMAGES/                   機体画像など
+│  └─ SOUNDS/rf/<声>/           アラーム音声
 ├─ assets/                      SD には自動コピーされない素材
 │  ├─ ROTORFLIGHT_fitted.png    229×104 の透過キャンバスにロゴ (200px) を中央配置
 │  └─ model_image.png           初期の機体画像サンプル (320×90)
-├─ tools/diagtest/sdcard/       診断ウィジェット (フォント・ビットマップ実測用、1回使い切り)
+├─ tools/diagtest/sdcard/       診断ウィジェット (フォント・ビットマップ実測 DiagTest、描画速度 DrawBench / LvglBench)
 ├─ tools/voice/                 音声台本 voices.csv と VOICEVOX 一括生成 make_voices.ps1
-├─ tools/luatest/               画面なし検証 (Node + fengari。`npm install` → `npm test`)
+├─ tools/luatest/               画面なし検証 (Node + fengari、lvgl / io の代役付き。`npm install` → `npm test`)
 ├─ types/edgetx.lua             lua-language-server 用 EdgeTX API 宣言 (使用分のみ)
 ├─ scripts/deploy.ps1           SD カードへのコピー
 ├─ scripts/sim.ps1, sim-capture.ps1, sim-template/   シミュレータ起動・LCD キャプチャ
 ├─ sim/                         シミュレータ用 SD イメージとキャプチャ (自動生成、git 対象外)
 ├─ docs/
-│  ├─ architecture.md           main.lua の構造と画面遷移
+│  ├─ architecture.md           ファイル構成・処理の流れ・画面遷移
 │  ├─ project_summary.md        他プロジェクトへ渡すための知見まとめ
 │  ├─ voicevox_script.md        音声の生成方法と鳴るタイミング
 │  ├─ alarms_native.md          案C: EdgeTX 標準機能でのアラームバックアップ手順
@@ -315,19 +320,18 @@ RFTelem/
 - `getTime()` の単位は **10 ms (1/100 秒)**。秒に直すときは `/100`
 - `lcd.drawBitmap` の scale は **パーセント指定**。ただし `getBitmapSize` は信頼できないので、
   画像は表示サイズに事前リサイズして等倍で描く運用にしている
-- タッチ (`EVT_TOUCH_TAP`) は **ウィジェットがフルスクリーン表示のときだけ** 届く。
-  フライトログは時間では閉じない (Close ボタン / Enter / Close スイッチ / 再接続まで表示)。`CONFIG.flightLogTimeoutSec` を 1 以上にするとその秒数で待機画面へ
+- タッチとキー、lvgl のボタンは **ウィジェットがフルスクリーン表示のときだけ** 有効 (EdgeTX 2.12)
+- EdgeTX の Lua (5.3) では文字列のメソッド呼び出し (`s:match()` など) が使えない (シミュレータで確認)。`string.match(s, ...)` の形で書く。
+  また `12.5 == math.floor(12.5)` が true になるので、整数判定は `isWhole` を使う
+- 1 フレームの Lua 命令数が多すぎると「CPU limit」で止まる。luatest の `cpu longflight` で画面ごとの最大を確認する
+  (lvgl の組み立て自体は C なので数えない)。目安: 約 30,000 で停止の実績。現在の最大はフライトログを開くフレームの約 16,000
 
 ## 注意・未検証
 
-- `main.lua` は実機 (TX16S MK3) で動作を確認しながら開発している。実機で未確認の項目:
-  FC へのバッテリープロファイル送信 (ソース確認のみ)、振動の有無と `playHaptic` の単位、
-  トリム → 論理スイッチによる操作、実機でのタッチ長押し (シミュレータでは Enter 長押しで確認済み)、
-  設定メニューの RF2 / ELRS ツール (FC・モジュールとの通信、メモリ量)。
+- 実機 (TX16S MK3) で動作を確認しながら開発している。実機で未確認の項目:
+  トリム → 論理スイッチによる操作、飛行履歴・飛行前チェック・リンク品質・ガバナー目標の表示 (2026-11-02 追加)。
   シミュレータのフォント描画が実機と同じかも未確認なので、最終判断は実機で行う。
-- `scripts/deploy.ps1` が環境に合わない場合は、`sdcard/` の中身を SD のルートへ手動でコピーすればよい。
-- `main.lua` 冒頭のコメントの一部は旧レイアウト時代の記述が残っている
-  (例: 現在は存在しない "Max Amp/Min Volt" チップへの言及)。挙動の一次情報はコード本体。
-- EdgeTX 2.12 のウィジェットオプションに文字列選択型があるかは確認していない。
-  Theme を数値指定にしているのは、開発時にその前提で作ったため。
+- `scripts/deploy.ps1` が環境に合わない場合は、`sdcard/` の中身を SD のルートへ手動でコピーすればよい
+  (そのときは SD の `WIDGETS/RFTelem/*.luac` を消すと確実)。
+- EdgeTX 2.12 のウィジェットオプションに文字列選択型は無い (VALUE/COLOR/SOURCE/BOOL)。Theme などは数値指定。
 - 型スタブは使用 API のみ。未宣言のグローバルは警告になるので、必要に応じて `types/edgetx.lua` に追加する。
