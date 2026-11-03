@@ -202,8 +202,15 @@ local CONFIG = {
     escCaution  = 80,    -- deg C
     escCritical = 90,
     escHyst     = 5,
-    becCritical = 6.0,   -- V
-    becHyst     = 0.3,
+    -- BEC: relative to each model's nominal voltage, as models fly 5 to 12 V
+    -- BECs (FC.becUpdate learns it). Caution / critical below these fractions
+    -- for 2 s / 1 s, clear becHyst above them. With no nominal known yet the
+    -- lowest step is used, which can't false-alarm on any model.
+    becSteps    = { 5, 6, 7.4, 8, 8.4, 12 },
+    becCaution  = 0.90,
+    becCritical = 0.80,
+    becHyst     = 0.04,
+    becLearnSec = 3,     -- stable within 0.1 V this long (disarmed, rotor stopped)
     flightTimeSec = 0,   -- >0: one "flight time" call when the timer passes it
     -- Battery not full: once per connect, after the connect quiet time + 1 s
     -- (values settled), disarmed with the rotor stopped, Vcel below fullCell
@@ -632,8 +639,9 @@ local SETTINGS = {
     unit = "\194\176C", default = CONFIG.alarm.escCaution, apply = function(v) CONFIG.alarm.escCaution = v end },
   { key = "escCritical", group = "Alarms", label = "ESC critical", kind = "number", min = 70, max = 130, step = 5,
     unit = "\194\176C", default = CONFIG.alarm.escCritical, apply = function(v) CONFIG.alarm.escCritical = v end },
-  { key = "becCritical", group = "Alarms", label = "BEC critical", kind = "number", min = 4.5, max = 8.0, step = 0.1,
-    decimals = 1, unit = "V", default = CONFIG.alarm.becCritical, apply = function(v) CONFIG.alarm.becCritical = v end },
+  -- per model, kept in its stats file (FC.becStep), not in settings.txt
+  { key = "becNominal", group = "Alarms", label = "BEC nominal", kind = "action",
+    text = function(wgt) return R.FC.becText(wgt) end, step = function(wgt, dir) R.FC.becStep(wgt, dir) end },
   { key = "theme", group = "Display", label = "Theme", kind = "choice", choices = { "Color", "Mono", "Cyan" },
     option = "Theme" },
   { key = "perf", group = "Display", label = "Frame rate", kind = "bool",
@@ -730,6 +738,7 @@ function SET.set(def, v)
 end
 
 function SET.text(wgt, def)
+  if def.kind == "action" then return def.text(wgt) end
   local v = SET.value(wgt, def)
   if def.kind == "bool" then return v and "On" or "Off" end
   if def.kind == "choice" then return def.choices[(v or 0) + 1] or def.choices[1] end
@@ -788,6 +797,8 @@ function HIST.save(model, s)
     if not f then return end
     io.write(f, "flights=", tostring(s.flights), "\n", "seconds=", tostring(s.seconds), "\n",
       "mah=", tostring(s.mah), "\n", "last=", s.last, "\n")
+    if s.bec then io.write(f, "bec=", tostring(s.bec), "\n") end
+    if s.becManual then io.write(f, "becManual=", tostring(s.becManual), "\n") end
     for i = 1, 6 do
       local p = s.packs[i]
       if p then io.write(f, "p", tostring(i), "=", tostring(p.n), ",", tostring(p.mah), ",", p.last, "\n") end
@@ -802,8 +813,12 @@ function HIST.save(model, s)
 end
 
 -- Flight history > Reset: totals, packs and recent start over. The full
--- record (/LOGS/RotorHUD-<model>.csv) is kept.
-function HIST.reset(model) HIST.save(model, HIST.empty()) end
+-- record (/LOGS/RotorHUD-<model>.csv) and the BEC nominal are kept.
+function HIST.reset(model)
+  local old, s = HIST.load(model), HIST.empty()
+  s.bec, s.becManual = old.bec, old.becManual
+  HIST.save(model, s)
+end
 
 function HIST.record(wgt)
   local sec = math.floor(wgt.flightSeconds or 0)
@@ -1513,9 +1528,14 @@ local function runAlarms(wgt, t, running, connected)
     latch(a, "escCrit", t.temp >= cfg.escCritical, t.temp < cfg.escCritical - cfg.escHyst, 0)
   critical(wgt, "escCrit", escCrit, "esc_critical")
 
-  local becCrit = t.becV ~= nil and t.becV > 0 and
-    latch(a, "becCrit", t.becV < cfg.becCritical, t.becV >= cfg.becCritical + cfg.becHyst, 1)
+  local becNom = wgt.becNominal or cfg.becSteps[1]
+  local becSeen = t.becV ~= nil and t.becV > 0
+  local becCrit = becSeen and latch(a, "becCrit", t.becV < becNom * cfg.becCritical,
+    t.becV >= becNom * (cfg.becCritical + cfg.becHyst), 1)
+  local becCau = becSeen and latch(a, "becCau", t.becV < becNom * cfg.becCaution,
+    t.becV >= becNom * (cfg.becCaution + cfg.becHyst), 2)
   critical(wgt, "becCrit", becCrit, "bec_low")
+  if becCrit then a.fired.becCau = becCau or nil else caution(wgt, "becCau", becCau, "bec_low") end
 
   local govUpper = t.gov and string.upper(t.gov)
   critical(wgt, "govLost", govUpper ~= nil and GOV_CRITICAL[govUpper] == true, GOV_VOICE[govUpper])
@@ -2151,6 +2171,81 @@ function FC.sensorCheck(wgt, connected)
   playEffect(wgt, "caution")
 end
 
+-- The model's name is final: the FC's name has been applied or won't be.
+function FC.nameSettled(wgt)
+  if CONFIG.simulate or not CONFIG.telemetry.decode then return true end
+  local tries = wgt.rt and wgt.rt.tries or {}
+  return wgt.nameDone or wgt.fcSetName == false or wgt.fcName == ""
+    or (tries[12] or 0) >= 6 or (tries[10] or 0) >= 6
+end
+
+-- Nearest BEC step within 10%, or nil
+function FC.becSnap(v)
+  local best
+  for _, step in ipairs(CONFIG.alarm.becSteps) do
+    if math.abs(v - step) <= step * 0.10 and (not best or math.abs(v - step) < math.abs(v - best)) then best = step end
+  end
+  return best
+end
+
+-- Each model's BEC nominal voltage, one line in its stats file, read once
+-- per connect. Learned from a stable voltage while disarmed with the rotor
+-- stopped, and only ever raised, so a weakening BEC isn't learned as a lower
+-- one; a BEC swapped for a lower one is set in Settings > Alarms.
+function FC.becUpdate(wgt, t, connected, running, armed)
+  if not connected then
+    wgt.becModel, wgt.becNominal, wgt.becManual, wgt.becLearn, wgt.becDone = nil, nil, nil, nil, nil
+    return
+  end
+  if not FC.nameSettled(wgt) or not (model and model.getInfo) then return end
+  local info, cfg, now = model.getInfo(), CONFIG.alarm, getTime()
+  if info.name ~= wgt.becModel then
+    local s = HIST.load(info.name)
+    wgt.becModel, wgt.becNominal, wgt.becManual = info.name, s.bec, s.becManual == 1
+    wgt.becLearn, wgt.becDone = nil, nil
+  end
+  local v = t.becV
+  if wgt.becDone or wgt.becManual then return end
+  if armed or running or not v or v <= 0 or armdSettling(t.armd) then wgt.becLearn = nil; return end
+  local l = wgt.becLearn
+  if not l or math.abs(v - l.v) > 0.1 then wgt.becLearn = { v = v, at = now }; return end
+  if now - l.at < cfg.becLearnSec * 100 then return end
+  wgt.becLearn, wgt.becDone = nil, true
+  local snap = FC.becSnap(v)
+  if snap and (not wgt.becNominal or snap > wgt.becNominal) then
+    wgt.becNominal = snap
+    local s = HIST.load(info.name)
+    s.bec = snap
+    HIST.save(info.name, s)
+  end
+end
+
+-- Settings > Alarms > BEC nominal, for the connected model
+function FC.becText(wgt)
+  if not wgt.becModel then return "No link" end
+  if wgt.becManual and wgt.becNominal then return wgt.becNominal .. "V" end
+  return wgt.becNominal and ("Auto " .. wgt.becNominal .. "V") or "Auto --"
+end
+
+-- Auto (learn again) -> each step -> Auto
+function FC.becStep(wgt, dir)
+  if not wgt.becModel then return end
+  local steps, idx = CONFIG.alarm.becSteps, 0
+  if wgt.becManual then
+    for i, step in ipairs(steps) do if step == wgt.becNominal then idx = i end end
+  end
+  idx = (idx + dir) % (#steps + 1)
+  local s = HIST.load(wgt.becModel)
+  if idx == 0 then
+    s.bec, s.becManual = nil, nil
+    wgt.becNominal, wgt.becManual, wgt.becDone, wgt.becLearn = nil, false, nil, nil
+  else
+    s.bec, s.becManual = steps[idx], 1
+    wgt.becNominal, wgt.becManual = steps[idx], true
+  end
+  HIST.save(wgt.becModel, s)
+end
+
 local function newRfTelemetryState(wgt)
   local rt = { count = 0, skip = 0, tries = {} }
   rt.onReply = function(cmd, buf, isError)
@@ -2379,6 +2474,7 @@ local function tick(wgt)
   FC.eraseUpdate(wgt, connected)
   FC.nameUpdate(wgt, connected)
   FC.sensorCheck(wgt, connected)
+  FC.becUpdate(wgt, t, connected, running, t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1)
 
   -- Track when this disconnect started, so the flight log can
   -- auto-dismiss after a timeout - this is what makes the dismiss

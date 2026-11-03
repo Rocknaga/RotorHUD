@@ -84,7 +84,7 @@ do
 end
 LVSTUB = assert(load(FILES["/luatest/lvglstub.lua"], "lvglstub"))()
 lvgl = LVSTUB.lvgl
-LVSTUB.full = opts.full or opts.ui or false
+LVSTUB.full = opts.full or opts.ui or opts.becui or false
 local tones = 0
 playTone = function() tones = tones + 1 end
 -- EdgeTX-style io (io.open/io.write(f, ...)/io.read(f, n)/io.close(f)) on an
@@ -177,6 +177,34 @@ if opts.armdflight then
   patch("t%.perCellVoltage = t%.voltage / SIM_CELLS",
     "t.perCellVoltage = t.voltage / SIM_CELLS; local s2 = (getTime() / 100) %% 140; if t.armFlags == 1 and s2 > 30 and s2 < 40 then t.armd = 4 end")
 end
+-- "latecaps": the capacities arrive after the picker opened (12 s): the tiles
+-- must show them (MSP 32 now comes after the model name, 2026-11-04)
+if opts.latecaps then
+  patch("wgt%.battCaps = wgt%.battCaps or {", "if getTime() > 1300 then wgt.battCaps = wgt.battCaps or {")
+  patch("3800, 3800 }", "3800, 3800 } end")
+end
+-- BEC alarms relative to each model's nominal. "bec5": a 5 V BEC (the old
+-- fixed 6 V alarm rang all the time). "becdrop": 8.3 V, 7.4 V (88%) from 30 s,
+-- 6.5 V (77%) from 45 s. "bec12": 12 V, 10 V (83%) from 30 s.
+if opts.bec5 then patch("t%.perCellVoltage = t%.voltage / SIM_CELLS", "t.perCellVoltage = t.voltage / SIM_CELLS; t.becV = 5.0") end
+if opts.becdrop then
+  patch("t%.perCellVoltage = t%.voltage / SIM_CELLS",
+    "t.perCellVoltage = t.voltage / SIM_CELLS; local s3 = (getTime() / 100) %% 140; t.becV = (s3 >= 45 and s3 < 70) and 6.5 or (s3 >= 30 and s3 < 70) and 7.4 or 8.3")
+end
+if opts.bec12 then
+  patch("t%.perCellVoltage = t%.voltage / SIM_CELLS",
+    "t.perCellVoltage = t.voltage / SIM_CELLS; local s3 = (getTime() / 100) %% 140; t.becV = (s3 >= 30 and s3 < 70) and 10 or 12")
+end
+-- "becsaved": a stored nominal of 8.4 V and a BEC now at 7.4 V on the ground:
+-- not learned down, caution before flight. "becmanual": set to 5 V by hand,
+-- never raised by the 8.3 V it reads
+if opts.becsaved then
+  MEMFS["/WIDGETS/RotorHUD/stats-S2_Ultra.txt"] = "flights=0\nseconds=0\nmah=0\nlast=\nbec=8.4\n"
+  patch("t%.perCellVoltage = t%.voltage / SIM_CELLS", "t.perCellVoltage = t.voltage / SIM_CELLS; t.becV = 7.4")
+end
+if opts.becmanual then
+  MEMFS["/WIDGETS/RotorHUD/stats-S2_Ultra.txt"] = "flights=0\nseconds=0\nmah=0\nlast=\nbec=5\nbecManual=1\n"
+end
 -- "nil_<field>": that telemetry field missing (a sensor the FC doesn't send)
 for k in pairs(opts) do
   local f = k:match("^nil_(.+)$")
@@ -243,6 +271,11 @@ local UI_STEPS = {
   { 7700, "Close" },
   { 7900, "Menu" }, { 7920, "Flight history" }, { 7950, "Reset" }, { 7960, "Sure?" }, { 8000, "Close" },
 }
+-- "becui": Settings > Alarms > BEC nominal while connected and disarmed (72..75 s)
+if opts.becui then
+  UI_STEPS = { { 7250, "Menu" }, { 7260, "Settings" }, { 7270, "Alarms" }, { 7280, ">" }, { 7290, ">" },
+               { 7310, "<" }, { 7320, "<" } }
+end
 local uiDone = {}
 function UI(now)
   for i, s in ipairs(UI_STEPS) do
@@ -275,7 +308,18 @@ for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
     instr = 0
     widget.refresh(wgt, 0, nil)
     LVSTUB.frame()
-    if opts.ui then UI(NOW) end
+    if opts.ui or opts.becui then UI(NOW) end
+    if opts.becui and NOW == 7300 then
+      local stats = MEMFS["/WIDGETS/RotorHUD/stats-S2_Ultra.txt"] or ""
+      if wgt.becNominal ~= 6 or not wgt.becManual or not string.find(stats, "bec=6\nbecManual=1\n", 1, true) then
+        print("CHECK FAIL: BEC set by hand: " .. tostring(wgt.becNominal) .. " " .. stats)
+      end
+      if not string.find(table.concat(LVSTUB.texts(), "|"), "|6V|", 1, true) then print("CHECK FAIL: BEC row text") end
+    end
+    if opts.becui and NOW == 7330 then
+      local stats = MEMFS["/WIDGETS/RotorHUD/stats-S2_Ultra.txt"] or ""
+      if wgt.becManual or string.find(stats, "becManual", 1, true) then print("CHECK FAIL: BEC back to Auto: " .. stats) end
+    end
     if UI_SHOW and NOW >= UI_SHOW then
       UI_SHOW = nil
       local shown = table.concat(LVSTUB.texts(), " | ")
@@ -305,6 +349,11 @@ for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
       if wgt.lastScreenType == "armwarning" then ARMWARN_IN_FLIGHT = true end
       if string.find(table.concat(LVSTUB.texts(), "|"), "FC: RX LOSS", 1, true) then FC_WARN_SEEN = true end
     end
+    if opts.latecaps and NOW == 1450 then
+      local shown = table.concat(LVSTUB.texts(), " | ")
+      print("SHOWN " .. shown)
+      if not string.find(shown, "5000mAh", 1, true) then print("CHECK FAIL: picker tiles without the capacities") end
+    end
     local st = wgt.lastScreenType or "?"
     if instr > (maxInstr[st] or 0) then maxInstr[st] = instr end
     lastInstr[st] = instr
@@ -323,6 +372,22 @@ if opts.armdflight then
     if sc == "armwarning" and ARMWARN_IN_FLIGHT then oprint("CHECK FAIL: arm warning screen while armed") end
   end
   if not FC_WARN_SEEN then oprint("CHECK FAIL: no FC warning in the top bar while armed") end
+end
+do -- BEC alarms: what each scenario must say, and the nominal it must keep
+  local log = MEMFS["/LOGS/rotorhud_alarms.log"] or ""
+  local stats = MEMFS["/WIDGETS/RotorHUD/stats-S2_Ultra.txt"] or ""
+  local function bec(tier) return string.find(log, tier .. " /SOUNDS/rf/no7/bec_low", 1, true) ~= nil end
+  local function want(name, cau, crit, nominal)
+    if bec("caution") ~= cau or bec("critical") ~= crit or not string.find(stats, "bec=" .. nominal .. "\n", 1, true) then
+      oprint(string.format("CHECK FAIL: %s: caution %s critical %s stats %s", name, tostring(bec("caution")), tostring(bec("critical")), stats))
+    end
+  end
+  if opts.bec5 then want("bec5", false, false, "5")
+  elseif opts.becdrop then want("becdrop", true, true, "8.4")
+  elseif opts.bec12 then want("bec12", true, false, "12")
+  elseif opts.becsaved then want("becsaved", true, false, "8.4")
+  elseif opts.becmanual then want("becmanual", false, false, "5")
+  elseif opts.ui then want("ui (kept by the history Reset)", false, false, "8.4") end
 end
 if opts.settingsoff or opts.settingson then
   local sawSimple = false

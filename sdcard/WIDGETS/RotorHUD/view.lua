@@ -364,7 +364,7 @@ function LV.buildBattSelect(k, wgt, w, h)
       if wgt.bp and wgt.bp.phase == "pick" and wgt.lastT then bpChoose(wgt, wgt.lastT, i) end
     end, 0, { color = COLOR.panel })
     LV.text(k, tx + 18, ty + tileH / 2 - 12, 60, tostring(i), DBLSIZE, COLOR.white)
-    LV.text(k, tx + 18, ty + tileH - 22, tileW - 30, label, fitFontMeasured(tileW - 30, 27, label, SMLSIZE), COLOR.dim)
+    LV.text(k, tx + 18, ty + tileH - 27, tileW - 30, label, fitFontMeasured(tileW - 30, 42, label, MIDSIZE), COLOR.dim)
     LV.text(k, tx + tileW / 2, ty + 16, tileW / 2 - 12, "current", SMLSIZE, COLOR.green, RIGHT, {
       visible = function() return LV.v.battProfile == i end })
   end
@@ -582,7 +582,11 @@ function LV.buildSettings(k, wgt, w, h)
       local mid = ry + bh / 2
       LV.text(k, rx + 16, mid, 174, def.label, LV.fitFont(def.label, 170, 0), COLOR.white)
       local key = "set_" .. def.key
-      if def.kind == "text" then -- EdgeTX opens its keyboard on tap
+      if def.kind == "action" then
+        LV.button(k, x0, ry, 80, bh, "<", function() def.step(wgt, -1) end, MIDSIZE)
+        LV.text(k, x0 + 84, mid, 120, LV.dv(key, ""), 0, COLOR.white, CENTER)
+        LV.button(k, x0 + 208, ry, 80, bh, ">", function() def.step(wgt, 1) end, MIDSIZE)
+      elseif def.kind == "text" then -- EdgeTX opens its keyboard on tap
         k[#k + 1] = { type = "textEdit", x = x0, y = ry, w = 300, h = bh, value = tostring(SET.value(wgt, def) or ""),
           length = def.length, set = function(s) SET.set(def, s) end }
         local cap = def.pack and wgt.battCaps and wgt.battCaps[def.pack]
@@ -1239,6 +1243,8 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
     sub = "set:" .. wgt.settings.group
   elseif screen == "history" then
     sub = "hist:" .. (wgt.histGen or 0)
+  elseif screen == "battselect" then
+    sub = "caps:" .. tostring(wgt.battCaps) -- the tiles' mAh, read after the picker opened
   end
   -- The flight log's sample statistics (up to 400 samples) get a frame of
   -- their own before the screen is built: both in one frame came close to

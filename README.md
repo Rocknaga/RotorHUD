@@ -202,7 +202,7 @@ SD の `/WIDGETS/RotorHUD/settings.txt` に保存されます。ウィジェッ�
 | タブ | 項目 |
 |---|---|
 | Voice | 声 (試聴付き)、アラーム On/Off、振動 On/Off、効果音 On/Off (試聴付き) |
-| Alarms | 着陸指示の残量 %、セル電圧 注意/危険、ESC 温度 注意/危険、BEC |
+| Alarms | 着陸指示の残量 %、セル電圧 注意/危険、ESC 温度 注意/危険、BEC の基準電圧 (機体ごと。Auto = 自動学習、または 5 / 6 / 7.4 / 8 / 8.4 / 12V を指定。接続中のみ変更可) |
 | Flight | 飛行時間の読み上げ、フライトログを閉じるまでの秒数、満充電チェック On/Off と満充電とみなすセル電圧 (既定 4.10V)、バッテリー選択を現状のまま閉じるまでの秒数 (0 = 閉じない) |
 | Packs | バッテリープロファイル 1〜6 の名前 (例 `6S 5000`、16 文字まで。タップで EdgeTX のキーボードが開きます)。右に FC の容量を表示。選択画面のタイルと履歴に使われます。空にすると `Profile N` |
 | Display | テーマ、fps 表示、機体画像、シンプル表示 (下記) |
@@ -260,10 +260,11 @@ ENTER・RTN / Close スイッチ (バッテリー選択より先にこちらを�
 
 | 段階 | 振動 | 音声 | 項目 |
 |---|---|---|---|
-| 危険 | パターン | 10 秒ごと (残量は 20 秒ごと) | 残量 ≤ `BattLand` (既定 20%) で「バッテリー、NNパーセント」「着陸してください」(以後 1% 下がるごとに残量を読み上げ)、セル電圧 < 3.50V (2 秒継続)、ESC ≥ 90℃、BEC < 6.0V、ヘッドスピードロスト (FALLBACK)、回転中の通信断 |
-| 注意 | 短く 1 回 | 1 回 | 残量 ≤ `BattLand` + 10%、セル電圧 < 3.60V (2 秒継続)、ESC ≥ 80℃、飛行時間 (`flightTimeSec`、既定オフ)、ARM 不可 (ARMD ≠ 0)、満充電でない |
+| 危険 | パターン | 10 秒ごと (残量は 20 秒ごと) | 残量 ≤ `BattLand` (既定 20%) で「バッテリー、NNパーセント」「着陸してください」(以後 1% 下がるごとに残量を読み上げ)、セル電圧 < 3.50V (2 秒継続)、ESC ≥ 90℃、BEC < 基準電圧の 80% (1 秒継続)、ヘッドスピードロスト (FALLBACK)、回転中の通信断 |
+| 注意 | 短く 1 回 | 1 回 | 残量 ≤ `BattLand` + 10%、セル電圧 < 3.60V (2 秒継続)、ESC ≥ 80℃、BEC < 基準電圧の 90% (2 秒継続)、飛行時間 (`flightTimeSec`、既定オフ)、ARM 不可 (ARMD ≠ 0)、満充電でない |
 | 情報 | 下記 | 変化時 | ARM / DISARM・レート (RTE#)・プロファイル (PID#)・バッテリープロファイル (接続直後にも現在値)、ガバナー状態、残量 10% 刻み (着陸指示以下は 1% 刻み) |
 
+- **BEC の基準電圧**: DISARM・ローター停止で 3 秒安定した電圧を、近い規格値 (5 / 6 / 7.4 / 8 / 8.4 / 12V、±10% 以内) に丸めて機体ごとに記録します。自動では上がる方向にしか更新しないので、弱った BEC を低い基準として覚え直しません。低い電圧の BEC に載せ替えたときは Settings > Alarms で変更してください。基準が未学習の間は 5V として判定します
 - **振動**: ARM で 1 回、DISARM で 2 回、レート・PID プロファイルの切り替えで 1 回 (同じスイッチで一緒に変わるので 1 回にまとめます)
 - **効果音** (playTone): 接続 (上がる 2 音) / 切断 (下がる 2 音) / 注意 (2 回) / 危険 (高い 3 連) を音声の前に鳴らします。
   Settings > Voice > Sound effects で On/Off と試聴 (Test) ができます。Mute スイッチで音声と一緒に止まります。音の高さ・長さは `CONFIG.alarm.toneEffects`
@@ -628,7 +629,7 @@ Saved to `/WIDGETS/RotorHUD/settings.txt` on the SD card; they take priority ove
 | Tab | Items |
 |---|---|
 | Voice | Voice (with preview), alarms on/off, vibration on/off, sound effects on/off (with preview) |
-| Alarms | Land-now charge %, cell voltage caution/critical, ESC temperature caution/critical, BEC |
+| Alarms | Land-now charge %, cell voltage caution/critical, ESC temperature caution/critical, BEC nominal voltage (per model: Auto = learned, or 5 / 6 / 7.4 / 8 / 8.4 / 12 V; changeable while connected) |
 | Flight | Flight-time call, seconds until the flight log closes, full-charge check on/off and the cell voltage counted as full (default 4.10 V), seconds until the picker closes keeping the current profile (0 = never) |
 | Packs | Names for battery profiles 1–6 (e.g. `6S 5000`, up to 16 characters; tap for the EdgeTX keyboard), with the FC's capacity on the right. Used on the picker tiles and in the history. Empty = `Profile N` |
 | Display | Theme, frame-rate display, model picture, simple screen (below) |
@@ -694,10 +695,11 @@ Checked by ALARMS and `CONFIG.alarm` in `core.lua`, also while the widget is not
 
 | Level | Vibration | Voice | Items |
 |---|---|---|---|
-| Critical | Pattern | Every 10 s (charge every 20 s) | Charge ≤ `BattLand` (default 20 %): "battery, NN percent", "land now" (then the charge at every 1 % lower), cell voltage < 3.50 V (2 s), ESC ≥ 90 °C, BEC < 6.0 V, headspeed lost (FALLBACK), link lost with the rotor turning |
-| Caution | One short | Once | Charge ≤ `BattLand` + 10 %, cell voltage < 3.60 V (2 s), ESC ≥ 80 °C, flight time (`flightTimeSec`, off by default), arming disabled (ARMD ≠ 0), pack not full |
+| Critical | Pattern | Every 10 s (charge every 20 s) | Charge ≤ `BattLand` (default 20 %): "battery, NN percent", "land now" (then the charge at every 1 % lower), cell voltage < 3.50 V (2 s), ESC ≥ 90 °C, BEC < 80 % of nominal (1 s), headspeed lost (FALLBACK), link lost with the rotor turning |
+| Caution | One short | Once | Charge ≤ `BattLand` + 10 %, cell voltage < 3.60 V (2 s), ESC ≥ 80 °C, BEC < 90 % of nominal (2 s), flight time (`flightTimeSec`, off by default), arming disabled (ARMD ≠ 0), pack not full |
 | Info | See below | On change | Armed / disarmed, rates (RTE#), profile (PID#), battery profile (also the current one after connecting), governor state, charge in 10 % steps (1 % below land-now) |
 
+- **BEC nominal voltage**: a voltage stable for 3 s while disarmed with the rotor stopped is rounded to the nearest standard value (5 / 6 / 7.4 / 8 / 8.4 / 12 V, within 10 %) and kept per model. It is only ever raised automatically, so a weakening BEC isn't learned as a lower one; after fitting a lower-voltage BEC, change it in Settings > Alarms. Until it is learned, 5 V is assumed
 - **Vibration**: once when arming, twice when disarming, once when the rates / PID profile changes (one switch moves both, so once)
 - **Sound effects** (playTone) before the voice: connect (two rising), disconnect (two falling), caution (twice),
   critical (three high). Turn on/off and preview (Test) in Settings > Voice > Sound effects; the Mute switch silences them

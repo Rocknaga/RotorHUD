@@ -170,6 +170,7 @@ check("MSP startup order", table.concat(order, ","), "1,12,10,32")
 local req = pushed[4]
 check("MSP request frame", req and table.concat(req[2], ","), "200,234,51,0,32,32")
 check("model name from the FC", MODEL_NAME, "Goblin 700")
+check("BEC nominal kept under the FC's name", wgt.becModel, "Goblin 700")
 for i = 1, 6 do check("capacity " .. i, wgt.battCaps and wgt.battCaps[i], CAPS[i]) end
 
 -- sensor check 6 s after the connect: every required sensor came (frames 1-2)
