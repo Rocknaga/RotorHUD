@@ -1,7 +1,7 @@
-// Headless harness: runs RFTelem under fengari (Lua 5.3) with EdgeTX API
+// Headless harness: runs RotorHUD under fengari (Lua 5.3) with EdgeTX API
 // stubs. Usage: node run.js <main.lua> <driver.lua> [args...]
 // Globals for the driver: MAIN_SRC (the main file), ARGS, FILES (every
-// .lua in the widget folder as "/WIDGETS/RFTelem/<name>", and this folder's
+// .lua in the widget folder as "/WIDGETS/RotorHUD/<name>", and this folder's
 // .lua files as "/luatest/<name>") so loadScript() can be stubbed.
 const fs = require('fs');
 const path = require('path');
@@ -24,7 +24,7 @@ function addDir(dir, prefix) {
     lua.lua_setfield(L, -2, to_luastring(prefix + name));
   }
 }
-addDir(path.dirname(path.resolve(mainPath)), '/WIDGETS/RFTelem/');
+addDir(path.dirname(path.resolve(mainPath)), '/WIDGETS/RotorHUD/');
 addDir(__dirname, '/luatest/');
 lua.lua_setglobal(L, to_luastring('FILES'));
 

@@ -1,14 +1,14 @@
 --[[
   DrawBench - drawing-speed benchmark for EdgeTX colour radios (lcd widgets)
   ---------------------------------------------------------------------------
-  ONE-TIME USE TOOL. RF Telem ran at ~5 fps on the TX16S MK3 (EdgeTX 2.12)
+  ONE-TIME USE TOOL. RotorHUD ran at ~5 fps on the TX16S MK3 (EdgeTX 2.12)
   with 80-100 ms of drawing per frame on every screen, simple or busy. This
   widget finds out which kind of drawing costs that time, so the fix is
   based on numbers, not guesses.
 
-  USE: put "DrawBench" in place of RF Telem on the same screen (same zone
+  USE: put "DrawBench" in place of RotorHUD on the same screen (same zone
   size), wait about 50 s until the results table shows, take a screenshot.
-  Put RF Telem back afterwards.
+  Put RotorHUD back afterwards.
 
   Each test draws the same thing every frame for 5 s (the 1st second is
   discarded) and records:

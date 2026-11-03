@@ -1,7 +1,6 @@
-RFTelem voice files - credits and terms
+RotorHUD voice files - credits and terms
 
 Japanese (tools/voice/make_voices.ps1, VOICEVOX https://voicevox.hiroshiba.jp/)
-Not included in the repository: generate them with make_voices.ps1.
 Each character has its own terms of use (summaries on the VOICEVOX site,
 2026-11-03); generated audio must be credited:
   no7       VOICEVOX:No.7               non-commercial use (https://voiceseven.com/)

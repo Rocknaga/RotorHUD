@@ -11,14 +11,6 @@ __pycache__/
 sdcard/IMAGES/GOOSKY *
 sdcard/IMAGES/K110S*
 sdcard/IMAGES/S2 Ultra*
-# Japanese voices (VOICEVOX): each character has its own terms, so the WAVs
-# aren't published - make them with tools/voice/make_voices.ps1
-sdcard/SOUNDS/rf/no7/
-sdcard/SOUNDS/rf/ryusei/
-sdcard/SOUNDS/rf/takehiro/
-sdcard/SOUNDS/rf/himari/
-sdcard/SOUNDS/rf/voidoll/
-sdcard/SOUNDS/rf/zundamon/
 # third-party pictures (GOOSKY product image, Rotorflight logo)
 assets/
 # notes for the coding assistant (local only)

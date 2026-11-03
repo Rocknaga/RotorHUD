@@ -1,4 +1,4 @@
--- EdgeTX API stubs + scenario driver for RFTelem (CONFIG.simulate = true).
+-- EdgeTX API stubs + scenario driver for RotorHUD (CONFIG.simulate = true).
 -- ARGS: "full" -> widget full screen (lvgl buttons built), "ui" -> full + taps
 --       through Menu / Settings / FC pages / flight-log Close (see UI below),
 --       "mute" -> Mute source active 30..60s, "bg" -> background() only 40..60s,
@@ -145,7 +145,7 @@ playHaptic = function(d, p)
 end
 
 -- patches go to whichever widget file holds the text (main.lua included)
-local MAIN_PATH = "/WIDGETS/RFTelem/main.lua"
+local MAIN_PATH = "/WIDGETS/RotorHUD/main.lua"
 FILES[MAIN_PATH] = MAIN_SRC
 local function patch(from, to)
   for path, s in pairs(FILES) do
@@ -297,7 +297,7 @@ debug.sethook()
 oprint(string.format("haptic pulses: %d, tones: %d, draw calls: %d, lvgl builds: %d", haptics, tones, draws, LVSTUB.builds))
 for _, s in ipairs(LVSTUB.issues) do oprint("LVGL " .. s) end
 if opts.ui then
-  local set = MEMFS["/WIDGETS/RFTelem/settings.txt"] or ""
+  local set = MEMFS["/WIDGETS/RotorHUD/settings.txt"] or ""
   if not string.find(set, "pack1=6S 5000\n", 1, true) then oprint("CHECK FAIL: pack name not saved: " .. set) end
 end
 if opts.files then for path, body in pairs(MEMFS) do oprint("FILE " .. path); oprint(body) end end

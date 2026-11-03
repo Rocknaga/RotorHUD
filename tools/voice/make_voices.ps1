@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Generates the RFTelem voice files with the local VOICEVOX engine.
+  Generates the RotorHUD voice files with the local VOICEVOX engine.
 
 .DESCRIPTION
   Reads tools\voice\voices.csv (file,group,text) and, for each voice set in

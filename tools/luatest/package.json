@@ -1,1 +1,1 @@
-{ "name": "rftelem-luatest", "private": true, "description": "Headless RFTelem main.lua runner (fengari + EdgeTX stubs)", "scripts": { "test": "node run.js ../../sdcard/WIDGETS/RFTelem/main.lua driver.lua ui" }, "dependencies": { "fengari": "0.1.4" } }
+{ "name": "rotorhud-luatest", "private": true, "description": "Headless RotorHUD main.lua runner (fengari + EdgeTX stubs)", "scripts": { "test": "node run.js ../../sdcard/WIDGETS/RotorHUD/main.lua driver.lua ui" }, "dependencies": { "fengari": "0.1.4" } }

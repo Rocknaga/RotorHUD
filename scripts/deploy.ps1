@@ -4,7 +4,7 @@
   radio's SD card, keeping the folder structure (WIDGETS\..., IMAGES\...).
 
 .PARAMETER Target
-  SD card root, e.g. E:\  . If omitted, the RFTELEM_SD environment variable is
+  SD card root, e.g. E:\  . If omitted, the ROTORHUD_SD environment variable is
   used. If that is empty too, or the value is 'auto', removable drives are
   scanned for something that looks like an EdgeTX SD card (has RADIO+MODELS,
   or WIDGETS).
@@ -21,7 +21,7 @@ drive safely afterwards.
 #>
 [CmdletBinding()]
 param(
-    [string]$Target = $env:RFTELEM_SD,
+    [string]$Target = $env:ROTORHUD_SD,
     [switch]$Tools,
     [switch]$DryRun
 )
@@ -46,7 +46,7 @@ if ([string]::IsNullOrWhiteSpace($Target) -or $Target.Trim() -eq 'auto') {
         $Target = $candidates[0]
         Write-Host "Auto-detected SD card: $Target"
     } elseif ($candidates.Count -eq 0) {
-        throw 'No EdgeTX SD card found among removable drives. Pass -Target E:\ (or set RFTELEM_SD).'
+        throw 'No EdgeTX SD card found among removable drives. Pass -Target E:\ (or set ROTORHUD_SD).'
     } else {
         throw ('Several candidate drives found: ' + ($candidates -join ', ') + '. Pass -Target explicitly.')
     }
@@ -91,7 +91,7 @@ foreach ($src in $sources) {
 # EdgeTX caches compiled scripts as .luac next to the .lua; drop the
 # widget's so the radio compiles the files just copied.
 if (-not $DryRun) {
-    $widgetDir = Join-Path $Target 'WIDGETS\RFTelem'
+    $widgetDir = Join-Path $Target 'WIDGETS\RotorHUD'
     if (Test-Path -LiteralPath $widgetDir) {
         Get-ChildItem -LiteralPath $widgetDir -Filter '*.luac' | Remove-Item -Force
     }

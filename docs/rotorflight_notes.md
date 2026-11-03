@@ -82,8 +82,8 @@ main.lua の `ARMD_REASONS` / `decodeArmd` がこの表。ARM 警告画面に理
 
 ## 容量を MSP で読めるか
 
-**更新 (2026-11-01)**: RF Telem にテレメトリデコーダーを内蔵し、rf2bg を外す運用にしたので、
-受信キューを RF Telem だけが読む → MSP 応答を受け取れるようになった (`rfMspUpdate`、`parseBatteryConfig`)。
+**更新 (2026-11-01)**: RotorHUD にテレメトリデコーダーを内蔵し、rf2bg を外す運用にしたので、
+受信キューを RotorHUD だけが読む → MSP 応答を受け取れるようになった (`rfMspUpdate`、`parseBatteryConfig`)。
 以下は rf2bg と共存していたときの分析 (`CONFIG.telemetry.decode = false` のときは今もこの状態)。
 
 ### rf2bg と共存する場合 (ウィジェットからは確実に読めない)
@@ -106,7 +106,7 @@ EdgeTX v2.12.0 `radio/src/lua/api_general.cpp`。
 - `crossfireTelemetryPush` は全スクリプト種別に登録された一般 API (ウィジェットからも呼べる)。
   モジュールが CRSF でなければ nil、出力バッファ使用中なら false
 - `crossfireTelemetryPop` は全スクリプト共通のキュー (`getTelemetryQueue`)。ウィジェットが pop すると
-  rf2tlm がセンサーにするフレームを奪うので、RF Telem は pop しない (成功は BAT# の変化で確認)
+  rf2tlm がセンサーにするフレームを奪うので、RotorHUD は pop しない (成功は BAT# の変化で確認)
 
 ## 未使用だが送られているセンサー (音声だけ用意済み)
 

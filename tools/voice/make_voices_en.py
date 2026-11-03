@@ -1,4 +1,4 @@
-"""English voice files for RFTelem with Piper (https://github.com/rhasspy/piper).
+"""English voice files for RotorHUD with Piper (https://github.com/rhasspy/piper).
 
 Reads tools/voice/voices_en.csv (file,group,text - the same file names as
 the Japanese voices.csv) and, for each English voice set below, writes one

@@ -1,7 +1,7 @@
 ---@meta
 -- EdgeTX Lua API declarations for lua-language-server (VS Code: sumneko.lua).
 --
--- SCOPE: the functions / constants that sdcard/WIDGETS/RFTelem/main.lua and
+-- SCOPE: the functions / constants that sdcard/WIDGETS/RotorHUD/main.lua and
 -- tools/diagtest actually use, plus a few common flags / events (BOLD, INVERS,
 -- BLINK, EVT_TOUCH_FIRST/BREAK/SLIDE, EVT_VIRTUAL_ENTER/EXIT) that are NOT used
 -- by this project. This is NOT the full EdgeTX API. If you use something new

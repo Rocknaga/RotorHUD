@@ -1,20 +1,20 @@
-# RFTelem — Rotorflight テレメトリウィジェット (EdgeTX / TX16S MK3)
+# RotorHUD — Rotorflight テレメトリウィジェット (EdgeTX / TX16S MK3)
 
 Rotorflight 搭載ヘリのテレメトリを、EdgeTX の Color LCD ウィジェットとして表示する Lua ウィジェット。
 ヘッドスピードを中心に、電圧・電流・バッテリー残量・ガバナー状態などを 1 画面にまとめ、
 ARM 警告・フライトログ・バッテリープロファイル選択・音声と振動のアラームを備える。
 
-> **English summary** — RFTelem is an EdgeTX Lua (lvgl) widget that shows Rotorflight helicopter telemetry
+> **English summary** — RotorHUD is an EdgeTX Lua (lvgl) widget that shows Rotorflight helicopter telemetry
 > on a colour radio (developed on a RadioMaster TX16S MK3, 800×480, EdgeTX 2.12, CRSF/ExpressLRS, Rotorflight 4.6).
 > - **Features**: headspeed-centred dashboard and a simpler gauge screen, arm/arming-disabled warnings, post-flight log
 >   with charts, flight history, battery-profile picker on connect, full-charge check, Rotorflight settings (the official
 >   RF2 Lua hosted with a touch UI), voice + haptic alarms (Japanese voices made with VOICEVOX, English voices with Piper).
 > - **Install**: copy `sdcard/` to the radio's SD card root (or `scripts/deploy.ps1 -Target E:\`), add the widget
->   `RF Telem` to a full-screen layout, and **remove the `rf2bg` special function and the RfTool widget** —
->   RFTelem decodes Rotorflight's custom telemetry itself.
-> - **Not included**: Japanese voice files (generate them with `tools/voice/make_voices.ps1` and VOICEVOX) and model
->   pictures (`/IMAGES/<model name>.png`, 186×46, and `<model name>-L.png`, 320×124, transparent PNG).
->   English voices (`SOUNDS/rf/en_male`, `en_female`) are included.
+>   `RotorHUD` to a full-screen layout, and **remove the `rf2bg` special function and the RfTool widget** —
+>   RotorHUD decodes Rotorflight's custom telemetry itself.
+> - **Voices**: Japanese (6 voices, VOICEVOX) and English (2 voices, Piper) are included under `SOUNDS/rf/`; credits and
+>   terms in `SOUNDS/rf/CREDITS.txt`. Model pictures are your own: `/IMAGES/<model name>.png` (186×46) and
+>   `<model name>-L.png` (320×124), transparent PNG.
 > - Settings are made on the radio (widget full screen: hold ENTER in the App-mode layout, then Menu > Settings).
 >   The rest of this README is in Japanese. License: GPL-3.0. Use at your own risk.
 
@@ -28,7 +28,7 @@ ARM 警告・フライトログ・バッテリープロファイル選択・音�
   `ARMD` ≠ 0 で全画面の ARM 警告、切断後はフライトログ。切替時はワイプ演出
 - **再接続で全リセット**: 最大・最小値とフライトタイマーを初期化してから表示
 - **接続直後のバッテリープロファイル選択**: FC の 6 プロファイルから選んで送信 (実機の FC では未検証)
-- **メニュー** (全画面時、DISARM 中): Rotorflight 設定 (タッチ対応の RF Telem 調画面)、バッテリープロファイル、
+- **メニュー** (全画面時、DISARM 中): Rotorflight 設定 (タッチ対応の RotorHUD 調画面)、バッテリープロファイル、
   FC 設定の閲覧、飛行履歴、Settings
 - **アラーム (音声 + 振動)**: 危険 / 注意 / 情報の 3 段階。声は日本語 6 種 (VOICEVOX) と英語 2 種 (Piper) から選択
 - **3 テーマ** (color / mono / cyan) と、機体名と同名の PNG による機体画像表示
@@ -42,27 +42,27 @@ ARM 警告・フライトログ・バッテリープロファイル選択・音�
 | 対象ファームウェア | EdgeTX v2.12.0 "Queen Anne's Revenge" (edgetx-tx16smk3) |
 | 通信 | CRSF / ExpressLRS |
 | FC | Rotorflight (センサー名は後述) |
-| ウィジェット名 | `RF Telem` (`/WIDGETS/RFTelem/`: main.lua・core.lua・view.lua・rf2ui.lua) |
+| ウィジェット名 | `RotorHUD` (`/WIDGETS/RotorHUD/`: main.lua・core.lua・view.lua・rf2ui.lua) |
 
 ## インストール
 
 1. `sdcard/` の中身を、送信機の SD カードのルートへコピーする
-   (`WIDGETS/RFTelem/` の 4 ファイル、`IMAGES/`、`SOUNDS/` がそれぞれ対応する)。
+   (`WIDGETS/RotorHUD/` の 4 ファイル、`IMAGES/`、`SOUNDS/` がそれぞれ対応する)。
    Windows では、手動コピーのかわりに `scripts/deploy.ps1` が使える:
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Target E:\`
    - `-Target` は SD のルート。`auto` なら、EdgeTX の SD カードらしいリムーバブルドライブを自動検出する
    - `-Tools` で診断ウィジェットも、`-DryRun` でコピー対象の一覧のみ
    - 追加・上書きのみで、SD 上のファイルを削除しない
    - 送信機を USB ストレージモードにするか、カードリーダーで SD を挿してから実行する
-2. ラジオ側: ウィジェット画面 → 空きゾーン長押し → Add Widget → `RF Telem`。
+2. ラジオ側: ウィジェット画面 → 空きゾーン長押し → Add Widget → `RotorHUD`。
    フル表示は 1 ゾーン全画面レイアウト推奨 (小さいゾーンは簡易表示に切り替わる)。
-3. **Rotorflight のカスタムテレメトリは RF Telem 自身が解読する** (下記)。Rotorflight 公式 Lua の
+3. **Rotorflight のカスタムテレメトリは RotorHUD 自身が解読する** (下記)。Rotorflight 公式 Lua の
    **rf2bg (スペシャルファンクション) と RfTool ウィジェットは外す**。
 4. 機体を接続すると、センサー (Gov / Hspd / Vbat / BAT# など) が自動で作られる。
 
 ## Rotorflight テレメトリの内蔵デコーダー
 
-RF Telem は Rotorflight の CRSF カスタムテレメトリ (0x88) を自分で解読し、公式と同じ ID・名前で
+RotorHUD は Rotorflight の CRSF カスタムテレメトリ (0x88) を自分で解読し、公式と同じ ID・名前で
 センサーを作る。rotorflight-lua-scripts の `rf2tlm.lua` / `rf2tlm_sensors.lua` / `MSP/crsf.lua`・`common.lua`
 を移植したもの (GPL-3.0)。
 - **rf2bg のスペシャルファンクションは不要。むしろ外すこと**: Lua の受信キューは全スクリプトで 1 本しか無く、
@@ -86,9 +86,9 @@ GNU General Public License v3.0 ([LICENSE](LICENSE))。テレメトリデコー�
 ## タッチを使う場合 (App mode レイアウト)
 
 EdgeTX ではタッチとキーがウィジェットに届くのは**全画面表示のときだけ**で、Lua からは全画面にできない。
-EdgeTX 2.12 の **App mode** レイアウトを使うと、Enter 長押しだけで RF Telem が全画面になる。
-1. 画面設定 (Screens) → レイアウトを **App mode** にして RF Telem を置く
-2. 電源投入後に **ENTER を長押し** → 全画面 (タッチ・ダイヤル・Enter が RF Telem に届く)。
+EdgeTX 2.12 の **App mode** レイアウトを使うと、Enter 長押しだけで RotorHUD が全画面になる。
+1. 画面設定 (Screens) → レイアウトを **App mode** にして RotorHUD を置く
+2. 電源投入後に **ENTER を長押し** → 全画面 (タッチ・ダイヤル・Enter が RotorHUD に届く)。
    全画面でないときは待機画面などに「Hold ENTER to enable touch」と出る
 3. EdgeTX のメニューに戻るときは **RTN 長押し** で全画面を抜ける (App mode では左上の EdgeTX ボタンからも)
 - シミュレータで確認済み: Enter 長押しで全画面 → プロファイル選択のタイルをタップで送信まで動作。
@@ -118,7 +118,7 @@ EdgeTX の lvgl ウィジェット (EdgeTX 2.11 以降)。各画面を 1 回組�
 
 | 項目 | 中身 |
 |---|---|
-| Rotorflight settings | 公式 RF2 の設定ツールをウィジェット内で動かし、画面を RF Telem 調にしたもの (下記)。接続中のみ |
+| Rotorflight settings | 公式 RF2 の設定ツールをウィジェット内で動かし、画面を RotorHUD 調にしたもの (下記)。接続中のみ |
 | Battery profile | 接続直後と同じプロファイル選択画面。接続中で `BAT#` があるとき |
 | View FC settings | PID ゲイン / レート / ガバナープロファイルの閲覧 (下記)。接続中のみ |
 | Erase blackbox | FC のブラックボックス (dataflash) を消去。1 回目のタップで行が「Tap again: erase (NN% used)」(オレンジ、3 秒) になり、もう一度で消去。進行と結果は下の帯 (Erasing… → 緑の Blackbox erased + 確認音・振動)。接続中でブラックボックス情報 (MSP 70) が読めたときのみ |
@@ -144,13 +144,13 @@ EdgeTX の lvgl ウィジェット (EdgeTX 2.11 以降)。各画面を 1 回組�
 
 ### Flight history
 - 飛行ごと (ローター回転 10 秒以上、`CONFIG.history.minSec`) に、切断の時点で記録する
-  - `/LOGS/RFTelem-<機体名>.csv`: 1 飛行 1 行 (日時、パック、ローター時間、消費 mAh、残量、最大 rpm・A・W、最低電圧・セル・BEC、最高 ESC 温度)
-  - `/WIDGETS/RFTelem/stats-<機体名>.txt`: 合計 (回数・ローター時間・mAh・最終日時)、パック (バッテリープロファイル) ごとの回数・mAh・最終使用、直近 6 飛行
+  - `/LOGS/RotorHUD-<機体名>.csv`: 1 飛行 1 行 (日時、パック、ローター時間、消費 mAh、残量、最大 rpm・A・W、最低電圧・セル・BEC、最高 ESC 温度)
+  - `/WIDGETS/RotorHUD/stats-<機体名>.txt`: 合計 (回数・ローター時間・mAh・最終日時)、パック (バッテリープロファイル) ごとの回数・mAh・最終使用、直近 6 飛行
 - 画面: 合計 4 項目、パックごとの表 (Settings > Packs の名前があればその名前)、直近の飛行の表
 - **Reset** (タイトル右): 1 回目で「Sure?」(赤、3 秒)、もう一度で stats を 0 に戻す。`/LOGS` の CSV は残る
 
 ### Settings
-SD の `/WIDGETS/RFTelem/settings.txt` に保存。ウィジェットオプションの同じ項目 (Theme / Voice / BattLand) より優先。
+SD の `/WIDGETS/RotorHUD/settings.txt` に保存。ウィジェットオプションの同じ項目 (Theme / Voice / BattLand) より優先。
 
 | タブ | 項目 |
 |---|---|
@@ -285,7 +285,7 @@ ENTER・RTN / Close スイッチ (バッテリー選択より先にこちらを�
 
 ### VS Code
 
-`sdcard/WIDGETS/RFTelem/` の core.lua / view.lua / rf2ui.lua を編集する。拡張機能 `sumneko.lua` を入れると、
+`sdcard/WIDGETS/RotorHUD/` の core.lua / view.lua / rf2ui.lua を編集する。拡張機能 `sumneko.lua` を入れると、
 `.luarc.json` と `types/edgetx.lua` により EdgeTX API の補完・型チェックが効く。
 
 `.vscode/tasks.json` がある場合は、`Ctrl+Shift+B` → **Deploy to SD card** → SD のドライブ (`E:\` など) または `auto` を入力すると SD へ反映できる。
@@ -304,7 +304,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sim-capture.ps1 -Cou
 ```
 
 - `sim.ps1` は `sdcard\` を `sim\sdcard` にコピーし、**コピー側だけ** `CONFIG.simulate = true` にする
-  (`sdcard\` の core.lua は false のまま)。Companion に「RFTelem Sim (TX16S MK3)」プロファイルも作る。
+  (`sdcard\` の core.lua は false のまま)。Companion に「RotorHUD Sim (TX16S MK3)」プロファイルも作る。
 - `simulate = true` のとき、`readTelemetry` は `simulateTelemetry` のシナリオ値を返す
   (standby → armwarning → スプールアップ → 飛行 → 低電圧・ESC 高温 → THR-OFF → DISARM → flightlog)。
 - `sim-capture.ps1` はシミュレータのカメラボタン (LCD をクリップボードへコピー) をクリックする。
@@ -315,11 +315,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sim-capture.ps1 -Cou
 ### フォルダ構成
 
 ```
-RFTelem/
+RotorHUD/
 ├─ sdcard/                      SD カードのルートと同じ構造 (deploy でそのままコピーされる)
-│  ├─ WIDGETS/RFTelem/          ウィジェット (main.lua 入口 / core.lua / view.lua / rf2ui.lua)
+│  ├─ WIDGETS/RotorHUD/          ウィジェット (main.lua 入口 / core.lua / view.lua / rf2ui.lua)
 │  ├─ IMAGES/                   機体画像など
-│  └─ SOUNDS/rf/<声>/           アラーム音声 (英語 en_male / en_female のみ同梱。日本語は make_voices.ps1 で生成)
+│  └─ SOUNDS/rf/<声>/           アラーム音声 (日本語 6 種・英語 2 種。クレジットと規約は CREDITS.txt)
 ├─ tools/diagtest/sdcard/       診断ウィジェット (フォント・ビットマップ実測 DiagTest、描画速度 DrawBench / LvglBench)
 ├─ tools/voice/                 音声台本 voices.csv / voices_en.csv、VOICEVOX 一括生成 make_voices.ps1、Piper 生成 make_voices_en.py
 ├─ tools/luatest/               画面なし検証 (Node + fengari、lvgl / io の代役付き。`npm install` → `npm test`)
@@ -366,6 +366,6 @@ RFTelem/
   トリム → 論理スイッチによる操作、飛行履歴・飛行前チェック・リンク品質・ガバナー目標の表示 (2026-11-02 追加)。
   シミュレータのフォント描画が実機と同じかも未確認なので、最終判断は実機で行う。
 - `scripts/deploy.ps1` が環境に合わない場合は、`sdcard/` の中身を SD のルートへ手動でコピーすればよい
-  (そのときは SD の `WIDGETS/RFTelem/*.luac` を消すと確実)。
+  (そのときは SD の `WIDGETS/RotorHUD/*.luac` を消すと確実)。
 - EdgeTX 2.12 のウィジェットオプションに文字列選択型は無い (VALUE/COLOR/SOURCE/BOOL)。Theme などは数値指定。
 - 型スタブは使用 API のみ。未宣言のグローバルは警告になるので、必要に応じて `types/edgetx.lua` に追加する。

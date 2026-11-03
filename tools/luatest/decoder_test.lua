@@ -1,6 +1,6 @@
 -- RF TELEMETRY test: feeds hand-built Rotorflight CRSF frames through the
 -- widget's built-in decoder and MSP client, with CONFIG.simulate = false.
--- Usage: node run.js ../../sdcard/WIDGETS/RFTelem/main.lua decoder_test.lua
+-- Usage: node run.js ../../sdcard/WIDGETS/RotorHUD/main.lua decoder_test.lua
 NOW = 0
 local fails = 0
 local function check(name, got, want)

@@ -4,9 +4,9 @@
   ONE-TIME USE TOOL, companion to DrawBench. DrawBench showed that an lcd
   widget (redrawn completely every frame) tops out near 9-11 fps on the
   TX16S MK3. An lvgl widget keeps its objects and redraws only what
-  changed; this measures how fast that is, before RF Telem is rebuilt on it.
+  changed; this measures how fast that is, before RotorHUD is rebuilt on it.
 
-  USE: put "LvglBench" in place of RF Telem on the same screen, wait about
+  USE: put "LvglBench" in place of RotorHUD on the same screen, wait about
   25 s until the results table shows, take a screenshot.
 
   The scene is roughly a busy dashboard: full-screen background, 24 rounded

@@ -1,6 +1,6 @@
 # アラームのバックアップ設定 (案C: EdgeTX 標準機能)
 
-ウィジェット (案B) のアラームは、RF Telem がそのモデルの画面に置かれていないと動かない。
+ウィジェット (案B) のアラームは、RotorHUD がそのモデルの画面に置かれていないと動かない。
 命に関わる 2 項目 (バッテリー残量わずか / セル電圧危険) だけ、EdgeTX 標準の
 論理スイッチ (Logical Switches) + スペシャルファンクション (Special Functions) でも鳴らす。
 
@@ -41,7 +41,7 @@ Haptic の値はラジオの振動パターン番号。TX16S MK3 に振動モー
 
 ## 4. ウィジェット側の重複を止める
 
-`sdcard/WIDGETS/RFTelem/main.lua` の `CONFIG.alarm.nativeBackup = true` にする。
+`sdcard/WIDGETS/RotorHUD/main.lua` の `CONFIG.alarm.nativeBackup = true` にする。
 ウィジェットはバッテリー着陸指示・セル電圧危険を読み上げなくなる
 (着陸指示の残量以下の読み上げも止まる)。他のアラームは今まで通り。
 

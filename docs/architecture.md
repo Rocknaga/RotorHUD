@@ -1,6 +1,6 @@
-# RF Telem の構造
+# RotorHUD の構造
 
-`sdcard/WIDGETS/RFTelem/` の 4 ファイル。EdgeTX 2.11 以降の lvgl ウィジェット (lcd 描画は 2026-11-02 に削除)。
+`sdcard/WIDGETS/RotorHUD/` の 4 ファイル。EdgeTX 2.11 以降の lvgl ウィジェット (lcd 描画は 2026-11-02 に削除)。
 行番号は変わるので、関数名・節の見出し (`-- ===== XXX =====`) で探す。
 
 | ファイル | 役割 | 読み込み |
@@ -68,7 +68,7 @@ PID# が変わると再要求) → MSP_DATAFLASH_SUMMARY (70、ブラックボ�
   MSP_DATAFLASH_SUMMARY (70)、flags bit0 (ready) で完了。60 秒で打ち切り、切断で中止。進行は wgt.toolMsg (色付きの帯)
 
 ## 検証
-- `tools/luatest`: `node run.js ../../sdcard/WIDGETS/RFTelem/main.lua driver.lua [args]`。lvgl と io の代役付き
+- `tools/luatest`: `node run.js ../../sdcard/WIDGETS/RotorHUD/main.lua driver.lua [args]`。lvgl と io の代役付き
   (不正なプロパティはエラー、全画面でないとボタンを作らない、ウィジェットのコードからの文字列メソッド呼び出しはエラー)。
   `ui` で Menu → Settings → FC 閲覧 → フライトログの Close → 履歴まで自動でタップし、履歴の中身も検査。
   `cpu longflight` で画面ごとの Lua 命令数。`decoder_test.lua` でデコーダーと MSP
