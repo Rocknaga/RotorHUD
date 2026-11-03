@@ -1814,10 +1814,12 @@ end
 
 -- One 0x88 frame: { dest, origin, frame id, sid hi, sid lo, value..., ... }
 -- (rf2tlm.lua crossfirePop). Frame-id gaps count as skipped frames.
-local function decodeCustomFrame(rt, data)
-  local fid = data[3]
-  if rt.frameId and (fid - rt.frameId) % 256 > 1 then rt.skip = rt.skip + 1 end
-  rt.frameId, rt.count = fid, rt.count + 1
+-- The fields of one frame, in order. A frame cut off inside a value ran
+-- the decoders past its end (nil arithmetic / compare errors in refresh,
+-- seen on the radio 2026-11-04 with 24 sensors): decodeCustomFrame calls
+-- this under pcall, so the values before the cut are kept and the rest of
+-- that frame is dropped (counted in *Bad).
+function RF_SENSORS.fields(data)
   local p = 4
   while p < #data do
     local sid; sid, p = decU16(data, p)
@@ -1826,8 +1828,17 @@ local function decodeCustomFrame(rt, data)
     local val; val, p = s[4](data, p)
     if val then setTelemetryValue(sid, 0, 0, val, s[2], s[3], s[1]) end
   end
+end
+
+local function decodeCustomFrame(rt, data)
+  local fid = data[3]
+  if not fid then return end
+  if rt.frameId and (fid - rt.frameId) % 256 > 1 then rt.skip = rt.skip + 1 end
+  rt.frameId, rt.count = fid, rt.count + 1
+  if not pcall(RF_SENSORS.fields, data) then rt.bad = (rt.bad or 0) + 1 end
   setTelemetryValue(0xEE01, 0, 0, rt.count, UNIT_RAW, 0, "*Cnt")
   setTelemetryValue(0xEE02, 0, 0, rt.skip, UNIT_RAW, 0, "*Skp")
+  setTelemetryValue(0xEE03, 0, 0, rt.bad or 0, UNIT_RAW, 0, "*Bad")
 end
 
 -- MSP v1 reply reassembly (common.lua mspReceivedReply): status byte =

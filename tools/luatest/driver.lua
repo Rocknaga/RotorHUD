@@ -169,8 +169,13 @@ if opts.native then patch("nativeBackup = false,", "nativeBackup = true,") end
 if opts.msp then patch("if CONFIG%.simulate then %-%- no FC", "if false then -- no FC") end
 -- ARMD with real reasons: THROTTLE (bit 7) + ANGLE (bit 8) + ARM_SWITCH (bit 26)
 if opts.armdthr then patch("t%.armd = 67108872", "t.armd = 67108864 + 128 + 256") end
--- Settings > Display > Simple screen on (light palette, shapes)
+-- Settings > Display > Simple screen on
 if opts.simple then patch("simple = { on = false", "simple = { on = true") end
+-- "nil_<field>": that telemetry field missing (a sensor the FC doesn't send)
+for k in pairs(opts) do
+  local f = k:match("^nil_(.+)$")
+  if f then patch("t%.perCellVoltage = t%.voltage / SIM_CELLS", "t.perCellVoltage = t.voltage / SIM_CELLS; t." .. f .. " = nil") end
+end
 -- the battery-not-full window: full set above the simulated pack (4.18 V/cell)
 if opts.notfull then patch("fullCell = 4%.10", "fullCell = 4.30") end
 -- the frame-rate label on (CONFIG.perfOverlay)

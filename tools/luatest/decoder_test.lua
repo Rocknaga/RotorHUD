@@ -191,6 +191,23 @@ check("blackbox empty", wgt.blackbox and wgt.blackbox.used, 0)
 check("erase finished", wgt.erase, nil)
 check("erase message", doneMsg, "Blackbox erased")
 
+-- frames cut off inside a value (seen on the radio with 24 sensors): no
+-- error, the values before the cut kept, each such frame counted in *Bad
+local cutOk = true
+for i, frame in ipairs({
+  { 0xEA, 0xC8, 1, 0x10, 0x11, 0x13 },              -- Vbat: one byte of its two
+  { 0xEA, 0xC8, 2, 0x10, 0x14, 42, 0x10, 0x21 },    -- Bat% 42, then Vcel's id with no value
+  { 0xEA, 0xC8, 3, 0x10, 0x14, 42, 0x10, 0x35 },    -- Thr (S8) id with no value
+}) do
+  queue[#queue + 1] = { 0x88, frame }
+  NOW = NOW + 5
+  local ok, err = pcall(widget.refresh, wgt, 0, nil)
+  if not ok then cutOk = false; print("cut frame " .. i .. ": " .. tostring(err)) end
+end
+check("cut frames: no error", cutOk, true)
+check("cut frames: value before the cut", getValue("Bat%"), 42)
+check("cut frames: counted", getValue("*Bad"), 3)
+
 -- link lost: the model gets its own name back
 LINK_DOWN = true
 for step = 401, 800 do

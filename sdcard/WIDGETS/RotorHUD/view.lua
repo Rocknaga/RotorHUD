@@ -1215,8 +1215,6 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
     sub = wgt.infoView .. ":" .. tostring(buf) .. ":" .. tostring(wgt.fcProf)
   elseif screen == "settings" then
     sub = "set:" .. wgt.settings.group
-  elseif screen == "simple" then
-    sub = "simple:" .. tostring(wgt.govTarget) -- the target tick
   elseif screen == "history" then
     sub = "hist:" .. (wgt.histGen or 0)
   end
