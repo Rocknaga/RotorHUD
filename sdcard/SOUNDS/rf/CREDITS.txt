@@ -1,13 +1,14 @@
 RFTelem voice files - credits and terms
 
 Japanese (tools/voice/make_voices.ps1, VOICEVOX https://voicevox.hiroshiba.jp/)
-Each character has its own terms of use (check each before publishing; some
-ask for a specific credit form); generated audio must be credited:
-  no7       VOICEVOX:No.7
-  ryusei    VOICEVOX:青山龍星
+Not included in the repository: generate them with make_voices.ps1.
+Each character has its own terms of use (summaries on the VOICEVOX site,
+2026-11-03); generated audio must be credited:
+  no7       VOICEVOX:No.7               non-commercial use (https://voiceseven.com/)
+  ryusei    VOICEVOX:青山龍星            commercial / non-commercial
   takehiro  VOICEVOX:玄野武宏
   himari    VOICEVOX:冥鳴ひまり
-  voidoll   VOICEVOX:Voidoll
+  voidoll   VOICEVOX:Voidoll(CV:丹下桜)  commercial / non-commercial
   zundamon  VOICEVOX:ずんだもん
 
 English (tools/voice/make_voices_en.py, Piper https://github.com/rhasspy/piper, MIT)

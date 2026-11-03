@@ -247,9 +247,9 @@ ENTER・RTN / Close スイッチ (バッテリー選択より先にこちらを�
 | `BattPrev` | 選択画面で 1 つ前のプロファイルへ (`Close` が次へ)。トリム → 論理スイッチ経由を想定 |
 | `Voice` | アラームの声。`0`=No.7 アナウンス / `1`=青山龍星 / `2`=玄野武宏 / `3`=冥鳴ひまり / `4`=Voidoll / `5`=ずんだもん / `6`=English 男性 / `7`=English 女性 (Piper、`tools/voice/make_voices_en.py`。クレジットは `SOUNDS/rf/CREDITS.txt`) |
 
-**機体画像**: 機体名と同名の PNG (例: `S2 Ultra.png`) を `/IMAGES` に置く。表示は **等倍 1:1** なので、
-**186×46 の透過キャンバスに縮小した機体を中央配置**したファイルを作る (理由は下記)。
-`sdcard/IMAGES/S2 Ultra.png` は `assets/model_image.png` から作った仮画像。
+**機体画像**: 機体名と同名の PNG (例: `GOOSKY S2.png`) を `/IMAGES` に置く。表示は **等倍 1:1** なので、
+**186×46 の透過キャンバスに縮小した機体を中央配置**したファイルを作る (理由は下記)。シンプル表示用は
+`<機体名>-L.png` (320×124)。メーカーの画像から作ったものは著作権の都合でリポジトリに含めていない (各自で用意)。
 
 ## 確認済みセンサー名 (実機の Telemetry 一覧 42 項目から確定)
 
@@ -305,12 +305,9 @@ RFTelem/
 ├─ sdcard/                      SD カードのルートと同じ構造 (deploy でそのままコピーされる)
 │  ├─ WIDGETS/RFTelem/          ウィジェット (main.lua 入口 / core.lua / view.lua / rf2ui.lua)
 │  ├─ IMAGES/                   機体画像など
-│  └─ SOUNDS/rf/<声>/           アラーム音声
-├─ assets/                      SD には自動コピーされない素材
-│  ├─ ROTORFLIGHT_fitted.png    229×104 の透過キャンバスにロゴ (200px) を中央配置
-│  └─ model_image.png           初期の機体画像サンプル (320×90)
+│  └─ SOUNDS/rf/<声>/           アラーム音声 (英語 en_male / en_female のみ同梱。日本語は make_voices.ps1 で生成)
 ├─ tools/diagtest/sdcard/       診断ウィジェット (フォント・ビットマップ実測 DiagTest、描画速度 DrawBench / LvglBench)
-├─ tools/voice/                 音声台本 voices.csv と VOICEVOX 一括生成 make_voices.ps1
+├─ tools/voice/                 音声台本 voices.csv / voices_en.csv、VOICEVOX 一括生成 make_voices.ps1、Piper 生成 make_voices_en.py
 ├─ tools/luatest/               画面なし検証 (Node + fengari、lvgl / io の代役付き。`npm install` → `npm test`)
 ├─ types/edgetx.lua             lua-language-server 用 EdgeTX API 宣言 (使用分のみ)
 ├─ scripts/deploy.ps1           SD カードへのコピー
