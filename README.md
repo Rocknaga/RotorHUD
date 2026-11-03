@@ -4,6 +4,20 @@ Rotorflight 搭載ヘリのテレメトリを、EdgeTX の Color LCD ウィジ�
 ヘッドスピードを中心に、電圧・電流・バッテリー残量・ガバナー状態などを 1 画面にまとめ、
 ARM 警告・フライトログ・バッテリープロファイル選択・音声と振動のアラームを備える。
 
+> **English summary** — RFTelem is an EdgeTX Lua (lvgl) widget that shows Rotorflight helicopter telemetry
+> on a colour radio (developed on a RadioMaster TX16S MK3, 800×480, EdgeTX 2.12, CRSF/ExpressLRS, Rotorflight 4.6).
+> - **Features**: headspeed-centred dashboard and a simpler gauge screen, arm/arming-disabled warnings, post-flight log
+>   with charts, flight history, battery-profile picker on connect, full-charge check, Rotorflight settings (the official
+>   RF2 Lua hosted with a touch UI), voice + haptic alarms (Japanese voices made with VOICEVOX, English voices with Piper).
+> - **Install**: copy `sdcard/` to the radio's SD card root (or `scripts/deploy.ps1 -Target E:\`), add the widget
+>   `RF Telem` to a full-screen layout, and **remove the `rf2bg` special function and the RfTool widget** —
+>   RFTelem decodes Rotorflight's custom telemetry itself.
+> - **Not included**: Japanese voice files (generate them with `tools/voice/make_voices.ps1` and VOICEVOX) and model
+>   pictures (`/IMAGES/<model name>.png`, 186×46, and `<model name>-L.png`, 320×124, transparent PNG).
+>   English voices (`SOUNDS/rf/en_male`, `en_female`) are included.
+> - Settings are made on the radio (widget full screen: hold ENTER in the App-mode layout, then Menu > Settings).
+>   The rest of this README is in Japanese. License: GPL-3.0. Use at your own risk.
+
 > **免責事項**: 本ウィジェットの使用は**自己責任**で行ってください。使用または使用できなかったことによって生じた損害 (機体・送信機・SD カードの損傷、墜落、人身・物損事故など) について、作者は一切の責任を負いません。表示やアラーム (音声・振動) の正確さは保証されません。飛行前の点検と機体状態の確認は、操縦者自身の責任で行ってください。
 
 ## 特長
@@ -16,7 +30,7 @@ ARM 警告・フライトログ・バッテリープロファイル選択・音�
 - **接続直後のバッテリープロファイル選択**: FC の 6 プロファイルから選んで送信 (実機の FC では未検証)
 - **メニュー** (全画面時、DISARM 中): Rotorflight 設定 (タッチ対応の RF Telem 調画面)、バッテリープロファイル、
   FC 設定の閲覧、飛行履歴、Settings
-- **アラーム (音声 + 振動)**: 危険 / 注意 / 情報の 3 段階。声は VOICEVOX 由来の 6 種から選択
+- **アラーム (音声 + 振動)**: 危険 / 注意 / 情報の 3 段階。声は日本語 6 種 (VOICEVOX) と英語 2 種 (Piper) から選択
 - **3 テーマ** (color / mono / cyan) と、機体名と同名の PNG による機体画像表示
 - **検証環境**: EdgeTX Companion シミュレータ用スクリプトと、画面なしのテスト (`tools/luatest`) を同梱
 

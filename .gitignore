@@ -21,3 +21,5 @@ sdcard/SOUNDS/rf/voidoll/
 sdcard/SOUNDS/rf/zundamon/
 # third-party pictures (GOOSKY product image, Rotorflight logo)
 assets/
+# notes for the coding assistant (local only)
+CLAUDE.md
