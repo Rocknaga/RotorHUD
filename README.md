@@ -102,6 +102,8 @@ set telemetry_sensors = 3,4,5,6,7,8,15,43,50,60,90,91,93,95,96,97,0,0,0,0,0,0,0,
 save
 ```
 
+- 接続して 6 秒たっても届いていないセンサーがあると、画面下の帯にオレンジで `Not in the FC telemetry: BAT#` のように 12 秒間表示します。
+  バッテリープロファイルの選択画面は、`BAT#` が実際に届いているときだけ出ます (送信機に古い値が残っていても出しません)
 - 消費容量は ESC が測った値 (`EscC`、ESC1 capacity = 19) でも表示できます。両方あるときは `EscC` を使います
 - リンク品質 (`RQly` など) は ExpressLRS 側のセンサーをそのまま使います
 - センサーの番号は Rotorflight 4.6.0 のソース (`src/main/telemetry/sensors.h`、CLI は `src/main/cli/settings.c`) で確認しています。
@@ -524,6 +526,8 @@ set telemetry_sensors = 3,4,5,6,7,8,15,43,50,60,90,91,93,95,96,97,0,0,0,0,0,0,0,
 save
 ```
 
+- If a sensor still hasn't arrived 6 s after connecting, the strip at the bottom shows e.g. `Not in the FC telemetry: BAT#`
+  in orange for 12 s. The battery-profile picker only opens when `BAT#` really arrives (not on a value left on the radio)
 - The used capacity can also come from the ESC (`EscC`, ESC1 capacity = 19); when both are there, `EscC` is used
 - Link quality (`RQly` etc.) comes from ExpressLRS as usual
 - The sensor numbers were checked in the Rotorflight 4.6.0 source (`src/main/telemetry/sensors.h`, CLI in

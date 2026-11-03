@@ -1837,14 +1837,14 @@ end
 -- seen on the radio 2026-11-04 with 24 sensors): decodeCustomFrame calls
 -- this under pcall, so the values before the cut are kept and the rest of
 -- that frame is dropped (counted in *Bad).
-function RF_SENSORS.fields(data)
+function RF_SENSORS.fields(data, seen, now)
   local p = 4
   while p < #data do
     local sid; sid, p = decU16(data, p)
     local s = RF_SENSORS[sid]
     if not s then break end
     local val; val, p = s[4](data, p)
-    if val then setTelemetryValue(sid, 0, 0, val, s[2], s[3], s[1]) end
+    if val then setTelemetryValue(sid, 0, 0, val, s[2], s[3], s[1]); seen[sid] = now end
   end
 end
 
@@ -1853,7 +1853,8 @@ local function decodeCustomFrame(rt, data)
   if not fid then return end
   if rt.frameId and (fid - rt.frameId) % 256 > 1 then rt.skip = rt.skip + 1 end
   rt.frameId, rt.count = fid, rt.count + 1
-  if not pcall(RF_SENSORS.fields, data) then rt.bad = (rt.bad or 0) + 1 end
+  rt.seen = rt.seen or {}
+  if not pcall(RF_SENSORS.fields, data, rt.seen, getTime()) then rt.bad = (rt.bad or 0) + 1 end
   setTelemetryValue(0xEE01, 0, 0, rt.count, UNIT_RAW, 0, "*Cnt")
   setTelemetryValue(0xEE02, 0, 0, rt.skip, UNIT_RAW, 0, "*Skp")
   setTelemetryValue(0xEE03, 0, 0, rt.bad or 0, UNIT_RAW, 0, "*Bad")
@@ -2105,6 +2106,51 @@ function FC.nameUpdate(wgt, connected)
   end
 end
 
+-- Sensors the screens and alarms need (README "Rotorflight setup"), by
+-- custom-telemetry id; a pair = either one will do (FC or ESC capacity).
+-- Cel# isn't needed while Vcel comes.
+FC.required = {
+  { 0x1011, "Vbat" }, { 0x1012, "Curr" }, { 0x1013, "Capa/EscC", 0x1043 }, { 0x1014, "Bat%" },
+  { 0x1021, "Vcel" }, { 0x1035, "Thr" }, { 0x1081, "Vbec" }, { 0x10A0, "Tesc" }, { 0x10C0, "Hspd" },
+  { 0x1202, "ARM" }, { 0x1203, "ARMD" }, { 0x1205, "Gov" }, { 0x1211, "PID#" }, { 0x1212, "RTE#" },
+  { 0x1214, "BAT#" },
+}
+
+-- A sensor really decoded since this connect (rt.seen is cleared when the
+-- link drops). EdgeTX keeps a sensor's last value, so a value alone can be
+-- left over from an earlier session (a missing BAT# still opened the
+-- picker, 2026-11-04). Not "in the last few seconds": the FC sends an
+-- unchanged sensor only every 3 s (crsf.c slow rate). True when the
+-- decoder isn't in use (nothing to tell).
+function FC.fresh(wgt, sid)
+  if CONFIG.simulate or not CONFIG.telemetry.decode then return true end
+  return wgt.rt ~= nil and wgt.rt.seen ~= nil and wgt.rt.seen[sid] ~= nil
+end
+
+-- 6 s after a connect: the required sensors that never came, shown for 12 s
+-- in the tool banner (orange) so a telemetry list left incomplete on the FC
+-- is noticed. wgt.missing keeps the names.
+function FC.sensorCheck(wgt, connected)
+  if not connected or not wgt.sensorCheckAt or getTime() < wgt.sensorCheckAt then return end
+  wgt.sensorCheckAt = nil
+  if CONFIG.simulate or not CONFIG.telemetry.decode or (wgt.rt.count or 0) == 0 then return end
+  local seen, names = wgt.rt.seen or {}, {}
+  for _, r in ipairs(FC.required) do
+    if not seen[r[1]] and not (r[3] and seen[r[3]]) then names[#names + 1] = r[2] end
+  end
+  if #names == 0 then return end
+  wgt.missing = names
+  local shown = names -- one line of the banner holds about 6 names
+  if #names > 6 then
+    shown = {}
+    for i = 1, 5 do shown[i] = names[i] end
+    shown[6] = "+" .. (#names - 5) .. " more"
+  end
+  wgt.toolMsg = { text = "Not in the FC telemetry: " .. table.concat(shown, ", "), at = getTime(), sec = 12,
+    color = COLOR.orange }
+  playEffect(wgt, "caution")
+end
+
 local function newRfTelemetryState(wgt)
   local rt = { count = 0, skip = 0, tries = {} }
   rt.onReply = function(cmd, buf, isError)
@@ -2236,7 +2282,7 @@ local function bpUpdate(wgt, t, connected)
   if bp.phase == "wait" then
     if wgt.armWarningActive or now < (wgt.alarm.quietUntil or 0) then
       bp.since = now -- arm switch still on / EdgeTX link voice: ask after
-    elseif t.battProfile then
+    elseif t.battProfile and FC.fresh(wgt, 0x1214) then
       bp.phase, bp.sel, bp.since, bp.lastInput = "pick", t.battProfile, now, nil
       alert(wgt, "info", "battprofile_select")
     elseif now - bp.since > 500 then
@@ -2288,12 +2334,14 @@ local function tick(wgt)
     -- show fresh, and the flight goes into the history.
     wgt.showFlightLog = true
     HIST.record(wgt)
+    wgt.rt.seen = {} -- the next connect's sensors start over (FC.sensorCheck)
   end
   if connected and not wgt.wasConnected then
     resetTelemetryState(wgt)
     t = readTelemetry(wgt) -- re-read with the freshly cleared sensor cache
     bpStart(wgt)
     wgt.battCaps, wgt.fcApi, wgt.rt.tries, wgt.rt.capAskedAt = nil, nil, {}, nil
+    wgt.sensorCheckAt, wgt.missing = getTime() + 600, nil
     wgt.govTarget, wgt.blackbox, wgt.flightPack, wgt.lastPid, wgt.erase = nil, nil, nil, nil, nil
     wgt.fcSetName, wgt.fcName = nil, nil
   end
@@ -2330,6 +2378,7 @@ local function tick(wgt)
   rfMspUpdate(wgt, connected)
   FC.eraseUpdate(wgt, connected)
   FC.nameUpdate(wgt, connected)
+  FC.sensorCheck(wgt, connected)
 
   -- Track when this disconnect started, so the flight log can
   -- auto-dismiss after a timeout - this is what makes the dismiss

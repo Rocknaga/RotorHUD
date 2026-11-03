@@ -172,6 +172,15 @@ check("MSP request frame", req and table.concat(req[2], ","), "200,234,51,0,32,3
 check("model name from the FC", MODEL_NAME, "Goblin 700")
 for i = 1, 6 do check("capacity " .. i, wgt.battCaps and wgt.battCaps[i], CAPS[i]) end
 
+-- sensor check 6 s after the connect: every required sensor came (frames 1-2)
+check("sensor check: nothing missing", wgt.missing, nil)
+-- the same with BAT# never received: named in the banner
+wgt.rt.seen[0x1214], wgt.sensorCheckAt = nil, NOW
+NOW = NOW + 5
+widget.refresh(wgt, 0, nil)
+check("sensor check: BAT# missing", wgt.missing and table.concat(wgt.missing, ","), "BAT#")
+check("sensor check: banner", wgt.toolMsg and wgt.toolMsg.text, "Not in the FC telemetry: BAT#")
+
 -- blackbox erase (Menu > Erase blackbox, second tap): 72, then 70 until ready
 wgt.erase = { phase = "send", since = NOW, tries = 0 }
 local sent, doneMsg = {}, nil

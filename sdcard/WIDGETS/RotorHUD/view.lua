@@ -958,7 +958,7 @@ function LV.update(wgt, t, screen, connected, armed)
   v.full = okFull and full or false
   local info = model and model.getInfo and model.getInfo()
   v.model = info and info.name or ""
-  if wgt.toolMsg and getTime() - wgt.toolMsg.at <= 300 then
+  if wgt.toolMsg and getTime() - wgt.toolMsg.at <= (wgt.toolMsg.sec or 3) * 100 then
     v.toolMsg, v.toolMsgColor = wgt.toolMsg.text, wgt.toolMsg.color or COLOR.red
   else wgt.toolMsg, v.toolMsg = nil, nil end
   local fa = wgt.fullAlert
