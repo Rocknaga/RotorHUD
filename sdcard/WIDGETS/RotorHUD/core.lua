@@ -694,7 +694,8 @@ function SET.load()
         if def.key == key then
           local n = tonumber(val)
           if def.kind == "text" then USER[key] = val
-          elseif n then USER[key] = (def.kind == "bool") and (n ~= 0) or n end
+          elseif n and def.kind == "bool" then USER[key] = n ~= 0 -- not "and/or": false would fall through to 0
+          elseif n then USER[key] = n end
         end
       end
     end

@@ -4,24 +4,12 @@ Rotorflight を積んだヘリのテレメトリを、EdgeTX のカラー液晶�
 ヘッドスピードを中心に、電圧・電流・バッテリー残量・ガバナー状態などを 1 画面にまとめ、
 ARM 警告、フライトログ、バッテリープロファイルの選択、音声と振動によるアラームなどを備えています。
 
-> **English summary** — RotorHUD is an EdgeTX Lua (lvgl) widget that shows Rotorflight helicopter telemetry
-> on a colour radio (developed on a RadioMaster TX16S MK3, 800×480, EdgeTX 2.12, CRSF/ExpressLRS, Rotorflight 4.6).
-> - **Features**: headspeed-centred dashboard and a simpler gauge screen, arm/arming-disabled warnings, post-flight log
->   with charts, flight history, battery-profile picker on connect, full-charge check, Rotorflight settings (the official
->   RF2 Lua hosted with a touch UI), voice + haptic alarms (Japanese voices made with VOICEVOX, English voices with Piper).
-> - **Install**: copy `sdcard/` to the radio's SD card root (or `scripts/deploy.ps1 -Target E:\`), add the widget
->   `RotorHUD` to a full-screen layout, and **remove the `rf2bg` special function and the RfTool widget** —
->   RotorHUD decodes Rotorflight's custom telemetry itself.
-> - **Voices**: Japanese (6 voices, VOICEVOX) and English (2 voices, Piper) are included under `SOUNDS/rf/`; credits and
->   terms in `SOUNDS/rf/CREDITS.txt`. Model pictures are your own: `/IMAGES/<model name>.png` (186×46) and
->   `<model name>-L.png` (320×124), transparent PNG.
-> - Settings are made on the radio (widget full screen: hold ENTER in the App-mode layout, then Menu > Settings).
->   The rest of this README is in Japanese. License: GPL-3.0.
->
-> **Disclaimer**: Use this widget at your own risk. The author accepts no liability for any damage arising from its
-> use or inability to use it (including damage to models, radios or SD cards, crashes, injury or property damage).
-> The accuracy of the displayed values and of the alarms (voice and haptic) is not guaranteed. Pre-flight checks and
-> confirming the condition of your model remain the pilot's own responsibility.
+**[English version below](#english)**
+
+> **開発中です**: RotorHUD は現在も開発を続けています。実機 (TX16S MK3) で確認しながら進めていますが、
+> 画面や設定、ファイルの配置は今後変わることがあります。
+
+![ダッシュボード](docs/images/dashboard.png)
 
 > **免責事項**: 本ウィジェットは**ご自身の責任**でお使いください。使用したこと、または使用できなかったことによって生じた損害 (機体・送信機・SD カードの損傷、墜落、人身・物損事故など) について、作者は責任を負いかねます。表示やアラーム (音声・振動) の正確さは保証できません。飛行前の点検と機体の状態確認は、操縦者ご自身でお願いします。
 
@@ -39,6 +27,18 @@ ARM 警告、フライトログ、バッテリープロファイルの選択、�
 - **アラーム (音声 + 振動)**: 危険 / 注意 / 情報の 3 段階。声は日本語 6 種 (VOICEVOX) と英語 2 種 (Piper) から選べます
 - **3 テーマ** (color / mono / cyan) と、機体名と同じ名前の PNG による機体画像の表示
 - **検証環境**: EdgeTX Companion シミュレータ用のスクリプトと、画面なしのテスト (`tools/luatest`) を同梱しています
+
+## 画面
+
+| 待機 | バッテリープロファイル選択 |
+|---|---|
+| ![待機](docs/images/standby.png) | ![バッテリープロファイル選択](docs/images/battselect.png) |
+| **ダッシュボード** | **シンプル表示** |
+| ![ダッシュボード](docs/images/dashboard.png) | ![シンプル表示](docs/images/simple.png) |
+| **ARM 警告** | **フライトログ** |
+| ![ARM 警告](docs/images/armwarning.png) | ![フライトログ](docs/images/flightlog.png) |
+
+画像は EdgeTX Companion のシミュレータで撮ったものです (機体画像は表示していません)。
 
 ## 動作環境
 
@@ -64,7 +64,45 @@ ARM 警告、フライトログ、バッテリープロファイルの選択、�
    1 ゾーンの全画面レイアウトをおすすめします (小さいゾーンでは簡易表示になります)。
 3. **Rotorflight のカスタムテレメトリは RotorHUD が自分で読み取ります** (下記)。Rotorflight 公式 Lua の
    **rf2bg (スペシャルファンクション) と RfTool ウィジェットは外してください**。
-4. 機体を接続すると、センサー (Gov / Hspd / Vbat / BAT# など) が自動で作られます。
+4. FC 側でカスタムテレメトリを設定してください (下の「Rotorflight 側の設定」)。
+5. 機体を接続すると、センサー (Gov / Hspd / Vbat / BAT# など) が自動で作られます。
+
+## Rotorflight 側の設定 (テレメトリ)
+
+RotorHUD は Rotorflight の **CRSF カスタムテレメトリ**を使います。FC 側でカスタムテレメトリを有効にし、
+次のセンサーを送るように設定してください (Rotorflight Configurator の受信機のテレメトリ設定、または CLI)。
+
+| RotorHUD での名前 | Rotorflight のセンサー | 番号 | 使う場所 |
+|---|---|---|---|
+| `Vbat` | Battery voltage | 3 | 電圧 |
+| `Curr` | Battery current | 4 | 電流、最大電流・電力 |
+| `Capa` | Battery consumption | 5 | 消費容量 (mAh) |
+| `Bat%` | Battery charge level | 6 | 残量 %、残量のアラーム |
+| `Cel#` | Battery cell count | 7 | セル数 |
+| `Vcel` | Battery cell voltage | 8 | セル電圧、セル電圧のアラーム、満充電チェック |
+| `Thr` | Throttle control | 15 | スロットル |
+| `Vbec` | BEC voltage | 43 | BEC 電圧とアラーム |
+| `Tesc` | ESC temperature | 50 | ESC 温度とアラーム |
+| `Hspd` | Headspeed | 60 | ヘッドスピード |
+| `ARM` | Arming flags | 90 | ARM / DISARM |
+| `ARMD` | Arming disable flags | 91 | ARM 警告 |
+| `Gov` | Governor state | 93 | ガバナー状態 |
+| `PID#` | PID profile | 95 | PID プロファイル |
+| `RTE#` | Rates profile | 96 | レートプロファイル |
+| `BAT#` | Battery profile | 97 | バッテリープロファイル |
+
+CLI では次のとおりです (Rotorflight 4.6。`telemetry_sensors` は 40 枠あり、書かなかった枠は前の値のまま残るので、0 で埋めています)。
+
+```
+set crsf_telemetry_mode = CUSTOM
+set telemetry_sensors = 3,4,5,6,7,8,15,43,50,60,90,91,93,95,96,97,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+save
+```
+
+- 消費容量は ESC が測った値 (`EscC`、ESC1 capacity = 19) でも表示できます。両方あるときは `EscC` を使います
+- リンク品質 (`RQly` など) は ExpressLRS 側のセンサーをそのまま使います
+- センサーの番号は Rotorflight 4.6.0 のソース (`src/main/telemetry/sensors.h`、CLI は `src/main/cli/settings.c`) で確認しています。
+  ほかのバージョンでは異なる場合があります
 
 ## Rotorflight テレメトリの内蔵デコーダー
 
@@ -337,6 +375,7 @@ RotorHUD/
 ├─ scripts/deploy.ps1           SD カードへのコピー
 ├─ scripts/sim.ps1, sim-capture.ps1, sim-template/   シミュレータの起動・LCD キャプチャ
 ├─ docs/
+│  ├─ images/                   README のスクリーンショット
 │  ├─ architecture.md           ファイル構成・処理の流れ・画面遷移
 │  ├─ project_summary.md        知見のまとめ
 │  ├─ voicevox_script.md        音声の生成方法と鳴るタイミング
@@ -369,7 +408,438 @@ RotorHUD/
 
 - 実機 (TX16S MK3) で動作を確認しながら開発しています。実機でまだ確認していないもの:
   トリム → 論理スイッチによる操作、ARM 警告画面の CMS メニューの対処表示
+- 開発中のため、画面・設定・ファイルの配置は今後変わることがあります
 - `scripts/deploy.ps1` が環境に合わない場合は、`sdcard/` の中身を SD のルートへ手でコピーしてください
   (その際、SD の `WIDGETS/RotorHUD/*.luac` を消しておくと確実です)
 - EdgeTX 2.12 のウィジェットオプションに文字列の選択型は無いため (VALUE/COLOR/SOURCE/BOOL)、Theme などは数値で指定します
 - 型の宣言 (`types/edgetx.lua`) は使っている API だけです。未宣言のグローバルは警告になるので、必要に応じて追加してください
+
+---
+
+# English
+
+RotorHUD is a Lua widget that shows the telemetry of a Rotorflight helicopter on an EdgeTX colour screen.
+It puts headspeed first and gathers voltage, current, battery charge, governor state and more on one screen,
+with an arming warning, a post-flight log, a battery-profile picker and voice + haptic alarms.
+
+> **In development**: RotorHUD is still being developed. It is tested on a real radio (TX16S MK3) as it goes, but
+> screens, settings and file locations may change.
+
+> **Disclaimer**: Use this widget at your own risk. The author accepts no liability for any damage arising from its
+> use or inability to use it (including damage to models, radios or SD cards, crashes, injury or property damage).
+> The accuracy of the displayed values and of the alarms (voice and haptic) is not guaranteed. Pre-flight checks and
+> confirming the condition of your model remain the pilot's own responsibility.
+
+## Features
+
+- **Headspeed-centred dashboard**: Volt, Vcel, Current, Bec volt, Governor, Flight (MM:SS), Profile/Rate,
+  Battery bar (% / mAh), Throttle bar (% / °C)
+- **Simple screen**: throttle and battery arcs, a large model picture and bars for flight time, current and ESC temperature,
+  readable at a glance
+- **Screens follow the link state**: standby ("Waiting for connection") → dashboard. While `ARMD` ≠ 0 a full-screen
+  arming warning (with the cause and what to do); after the link drops, the flight log
+- **Full reset on reconnect**: maxima/minima and the flight timer start over
+- **Battery-profile picker right after connecting**, and a **full-charge check** (tells you when the pack isn't full)
+- **Menu** (full screen, disarmed): Rotorflight settings (touch UI), battery profile, FC settings viewer,
+  blackbox erase, flight history, Settings
+- **Alarms (voice + haptic)**: critical / caution / info. Voices: 6 Japanese (VOICEVOX) and 2 English (Piper)
+- **3 themes** (color / mono / cyan) and a model picture from a PNG named after the model
+- **Test tools**: scripts for the EdgeTX Companion simulator and a headless test harness (`tools/luatest`)
+
+## Screens
+
+| Standby | Battery-profile picker |
+|---|---|
+| ![Standby](docs/images/standby.png) | ![Battery-profile picker](docs/images/battselect.png) |
+| **Dashboard** | **Simple screen** |
+| ![Dashboard](docs/images/dashboard.png) | ![Simple screen](docs/images/simple.png) |
+| **Arming warning** | **Flight log** |
+| ![Arming warning](docs/images/armwarning.png) | ![Flight log](docs/images/flightlog.png) |
+
+Taken in the EdgeTX Companion simulator (model picture not shown).
+
+## Requirements
+
+| Item | |
+|---|---|
+| Radio | RadioMaster TX16S MK3 (800×480) |
+| Firmware | EdgeTX v2.12.0 "Queen Anne's Revenge" (edgetx-tx16smk3) |
+| Link | CRSF / ExpressLRS |
+| FC | Rotorflight 4.6 (sensor names below) |
+| Widget name | `RotorHUD` (`/WIDGETS/RotorHUD/`: main.lua, core.lua, view.lua, rf2ui.lua) |
+
+## Installation
+
+1. Copy the contents of `sdcard/` to the root of the radio's SD card
+   (`WIDGETS/RotorHUD/` with its 4 files, `IMAGES/`, `SOUNDS/`).
+   On Windows `scripts/deploy.ps1` does it for you:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy.ps1 -Target E:\`
+   - `-Target` is the SD root; `auto` looks for a removable drive that looks like an EdgeTX SD card
+   - `-Tools` also copies the diagnostic widgets; `-DryRun` only lists what would be copied
+   - It only adds and overwrites; nothing on the SD card is deleted
+   - Put the radio in USB storage mode (or use a card reader) first
+2. On the radio: widget screen → long-press an empty zone → Add Widget → `RotorHUD`.
+   A full-screen one-zone layout is recommended (small zones get a compact view).
+3. **RotorHUD decodes Rotorflight's custom telemetry itself** (below). **Remove the rf2bg special function and the
+   RfTool widget** of the official Rotorflight Lua.
+4. Set up custom telemetry on the FC ("Rotorflight setup" below).
+5. Connect the model: the sensors (Gov / Hspd / Vbat / BAT# ...) are created automatically.
+
+## Rotorflight setup (telemetry)
+
+RotorHUD uses Rotorflight's **CRSF custom telemetry**. Enable custom telemetry on the FC and have it send these sensors
+(in the receiver telemetry settings of the Rotorflight Configurator, or in the CLI).
+
+| Name in RotorHUD | Rotorflight sensor | Number | Used for |
+|---|---|---|---|
+| `Vbat` | Battery voltage | 3 | Voltage |
+| `Curr` | Battery current | 4 | Current, max current / power |
+| `Capa` | Battery consumption | 5 | Used capacity (mAh) |
+| `Bat%` | Battery charge level | 6 | Charge %, charge alarms |
+| `Cel#` | Battery cell count | 7 | Cell count |
+| `Vcel` | Battery cell voltage | 8 | Cell voltage, cell alarms, full-charge check |
+| `Thr` | Throttle control | 15 | Throttle |
+| `Vbec` | BEC voltage | 43 | BEC voltage and alarm |
+| `Tesc` | ESC temperature | 50 | ESC temperature and alarms |
+| `Hspd` | Headspeed | 60 | Headspeed |
+| `ARM` | Arming flags | 90 | Armed / disarmed |
+| `ARMD` | Arming disable flags | 91 | Arming warning |
+| `Gov` | Governor state | 93 | Governor state |
+| `PID#` | PID profile | 95 | PID profile |
+| `RTE#` | Rates profile | 96 | Rates profile |
+| `BAT#` | Battery profile | 97 | Battery profile |
+
+In the CLI (Rotorflight 4.6; `telemetry_sensors` has 40 slots and slots you don't write keep their old value, so the rest is
+filled with 0):
+
+```
+set crsf_telemetry_mode = CUSTOM
+set telemetry_sensors = 3,4,5,6,7,8,15,43,50,60,90,91,93,95,96,97,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+save
+```
+
+- The used capacity can also come from the ESC (`EscC`, ESC1 capacity = 19); when both are there, `EscC` is used
+- Link quality (`RQly` etc.) comes from ExpressLRS as usual
+- The sensor numbers were checked in the Rotorflight 4.6.0 source (`src/main/telemetry/sensors.h`, CLI in
+  `src/main/cli/settings.c`); other versions may differ
+
+## Built-in Rotorflight telemetry decoder
+
+RotorHUD decodes Rotorflight's CRSF custom telemetry (0x88) itself and creates the sensors with the same IDs and names as
+the official scripts. It is a port of `rf2tlm.lua` / `rf2tlm_sensors.lua` / `MSP/crsf.lua` / `common.lua` from
+rotorflight-lua-scripts (GPL-3.0).
+- **The rf2bg special function is not needed and has to be removed**: there is only one Lua receive queue for all scripts,
+  so two scripts reading it steal frames from each other and both lose values.
+  To remove it: Model → Special Functions → delete (or turn off) the `Lua Script` line that runs `rf2bg`.
+  If the RfTool widget is on a screen, remove it as well
+- Owning the receive side, RotorHUD **also gets MSP replies**: after connecting it reads each battery profile's capacity
+  (mAh), the governor target, the blackbox free space and so on from the FC
+- From the official start-up (rf2bg), **setting the model name is ported**: when the FC's "Set model name" (RF2 Model page)
+  is on, the model takes the FC's name while connected and gets its own name back on disconnect (kept as `prevName` in
+  settings.txt). Setting the FC clock (RTC) and the timer/GV parameters are not ported
+- To keep using rf2bg, set `CONFIG.telemetry.decode = false` (capacities etc. are then not read)
+- Test: `tools/luatest/decoder_test.lua` (hand-built frames checked against sensors, capacities, model name, blackbox erase)
+
+## License
+
+GNU General Public License v3.0 ([LICENSE](LICENSE)). The telemetry decoder and MSP handling are ported from
+[rotorflight-lua-scripts](https://github.com/rotorflight/rotorflight-lua-scripts) (GPL-3.0).
+Voice credits and terms: [sdcard/SOUNDS/rf/CREDITS.txt](sdcard/SOUNDS/rf/CREDITS.txt)
+(Japanese voices follow each VOICEVOX character's terms, English voices the Piper voice-model licences).
+
+## Using touch (App mode layout)
+
+EdgeTX only passes touch and keys to a widget **while it is full screen**, and Lua cannot make it full screen.
+With EdgeTX 2.12's **App mode** layout a long ENTER press makes RotorHUD full screen.
+1. Screens → set the layout to **App mode** and place RotorHUD
+2. After power-up, **hold ENTER** → full screen (touch, wheel and ENTER reach RotorHUD).
+   When not full screen, "Hold ENTER to enable touch" is shown on standby
+3. To get back to the EdgeTX menus, **hold RTN** to leave full screen (in App mode the EdgeTX button at the top left works too)
+- Without touch, closing the flight log and picking a profile work with the switch assigned to `Close`
+- The EdgeTX icon at the top left is drawn by EdgeTX in App mode **when not full screen** and cannot be turned off;
+  it disappears in full screen
+
+## Drawing and files
+
+An EdgeTX lvgl widget (EdgeTX 2.11+): each screen is built once and only changed values are redrawn.
+Measured on the radio (DrawBench / LvglBench in tools/diagtest): 12–20 fps versus 4–6 fps with the old lcd drawing.
+
+| File | Contents | Loaded |
+|---|---|---|
+| `main.lua` | Name and options only | At EdgeTX start (every widget's main.lua is loaded, so it is kept small) |
+| `core.lua` | Settings, telemetry (decoder, MSP), alarms, battery picker, history, menu | When the widget is created |
+| `view.lua` | Screens | When the widget is created |
+| `rf2ui.lua` | Rotorflight settings screens | The first time they are opened |
+
+- Buttons (menu, Settings, picker tiles, flight log Close, RF2 settings) only appear **in full screen** (EdgeTX behaviour).
+  In full screen a Touch badge is shown at the top left
+
+## Menu (full screen, disarmed only)
+
+Open it with **Menu** in the top bar of standby or the dashboard (or ENTER). Arming closes the menu and any screen opened from it.
+
+| Item | |
+|---|---|
+| Rotorflight settings | The official RF2 settings tool running inside the widget, with a touch-friendly look (below). Connected only |
+| Battery profile | The same picker as after connecting. Connected, with `BAT#` |
+| View FC settings | PID gains / rates / governor profile, read only (below). Connected only |
+| Erase blackbox | Erases the FC's blackbox (dataflash). The first tap turns the row into "Tap again: erase (NN% used)" (orange, 3 s), a second tap erases. Progress and result in the strip at the bottom (Erasing… → green Blackbox erased + tone and vibration). Connected and with the blackbox info read |
+| Flight history | This model's flight history (below) |
+| Settings | Voice, alarm, flight, pack-name and display settings (below) |
+
+### Rotorflight settings
+- Needs the **complete** rotorflight-lua-scripts on the SD card (`SCRIPTS/RF2`, `SCRIPTS/TOOLS/rf2.lua`,
+  `SCRIPTS/FUNCTIONS/rf2bg.lua`, `WIDGETS/RfStats`, `WIDGETS/RfTool`) — just present; the rf2bg special function and the
+  RfTool widget are not used. The first start compiles RF2 and then reopens by itself
+- Only the screen parts of the official RF2 (lvgl version) are replaced (`rf2ui.lua`); reading, writing, saving and
+  rebooting are RF2's own
+- Main menu as tiles, pages as cards or tables (scroll with a finger). Tap a value → an edit panel slides up
+  (slider, -10 -1 +1 +10, OK / Cancel; choices are buttons, one tap). Back / Save / Menu (Reload, Reboot FC) at the top
+- After Save, once the FC has been written, a green "Saved to the FC" shows for 2.5 s with a tone and two vibrations.
+  When saving isn't possible (e.g. armed) RF2 shows its warning and no Saved
+- `CONFIG.tools.rf2Skin = false` gives RF2's own screens. RTN also goes back
+- The ExpressLRS Lua tool cannot open inside the widget (different drawing method); use it from SYS > Tools
+
+### FC settings viewer (no full screen needed)
+- Each press of the switch assigned to `Page` steps PID gains → rates → governor profile → normal screen
+  (also from View FC settings in the menu). Read only; change values in Rotorflight settings
+- Switching PID / rates profiles while viewing reads that profile's values again. Closes on arming or link loss
+
+### Flight history
+- Each flight (rotor turning 10 s or more, `CONFIG.history.minSec`) is recorded when the link drops
+  - `/LOGS/RotorHUD-<model>.csv`: one line per flight (date, pack, rotor time, used mAh, charge, max rpm / A / W, min voltage / cell / BEC, max ESC temperature)
+  - `/WIDGETS/RotorHUD/stats-<model>.txt`: totals (flights, rotor time, mAh, last date), per pack (battery profile) flights / mAh / last use, last 6 flights
+- Screen: 4 totals, a table per pack (with its name from Settings > Packs), a table of recent flights
+- **Reset** (right of the title): first tap shows "Sure?" (red, 3 s), the second resets the totals. The CSV in `/LOGS` stays
+
+### Settings
+Saved to `/WIDGETS/RotorHUD/settings.txt` on the SD card; they take priority over the same widget options (Theme / Voice / BattLand).
+
+| Tab | Items |
+|---|---|
+| Voice | Voice (with preview), alarms on/off, vibration on/off, sound effects on/off (with preview) |
+| Alarms | Land-now charge %, cell voltage caution/critical, ESC temperature caution/critical, BEC |
+| Flight | Flight-time call, seconds until the flight log closes, full-charge check on/off and the cell voltage counted as full (default 4.10 V), seconds until the picker closes keeping the current profile (0 = never) |
+| Packs | Names for battery profiles 1–6 (e.g. `6S 5000`, up to 16 characters; tap for the EdgeTX keyboard), with the FC's capacity on the right. Used on the picker tiles and in the history. Empty = `Profile N` |
+| Display | Theme, frame-rate display, model picture, simple screen (below) |
+
+To add a setting, add one line to `SETTINGS` in `core.lua` (and a tab in `SET.groups` if needed).
+
+### Simple screen (Settings > Display > Simple screen)
+Replaces the dashboard with a screen made mostly of shapes.
+- Left card: a throttle arc (0–100 %, 270°, open at the bottom) with a scale around it (every 5 %, long white marks at
+  0 / 50 / 100 %). Its colour shows the governor state. `Throttle NN%` at the top left, the governor target at the top right.
+  Inside it a battery arc (same colours as elsewhere, changing at 50 % / 20 %; small grey marks at 25 / 50 / 75 %, a red
+  mark at the land-now %). The ring in the middle shows the arm state (green = armed, grey = disarmed), with the charge %,
+  `used/capacity mAh` (capacity of the selected battery profile) and the battery profile (name from Settings > Packs,
+  else `Battery #N`) inside. Headspeed in the opening at the bottom
+- Top right card: a large model picture, `/IMAGES/<model>-L.png` (320×124, transparent; `CONFIG.simple.imageW/H`),
+  else the normal small picture
+- Bottom right card: 10-segment bars for flight time (full = Settings' flight-time call, or `CONFIG.simple.flightSec` when
+  off), current (`CONFIG.simple.currentMax`) and ESC temperature (full = ESC critical, orange mark = caution; orange at
+  caution, red at critical)
+- Top bar, Menu and warnings as on the dashboard
+
+### Full-charge check
+Once per connection, after the values have settled (link quiet time + 1 s), disarmed with the rotor stopped: when Vcel is
+below Settings > Flight "Full at cell", a **BATTERY NOT FULL** window opens over the screen (orange frame, caution tone +
+vibration), showing the cell voltage, the threshold and a battery shape (filled by 3.5 V…threshold).
+It closes with a tap anywhere on it (full screen) / ENTER or RTN / the Close switch (before the picker) / arming /
+automatically after 10 s (the bar at the bottom shows the time left, `CONFIG.alarm.fullAlertSec`)
+
+## More about the screens
+- Top bar: warnings, clock, link quality (RQly %), signal bars, radio battery (charge % inside, from the radio's battery
+  range in Radio Setup)
+- Above the dashboard's headspeed, on the right: the FC's governor target headspeed (`target 2100`; read again when the PID
+  profile changes)
+- The bottom row of the battery picker is a pre-flight check: arming OK or not, governor target, blackbox free space
+  (orange below 10 %)
+- The arming warning also says what to do for some causes (e.g. the FC's CMS menu is open, CLI connected, reboot needed)
+
+## Battery-profile picker (after connecting)
+
+When the model connects disarmed and without an arming warning, a screen to pick one of the FC's 6 battery profiles appears.
+- Full screen: tap a tile to choose / move with the wheel and press ENTER / RTN to close
+- Not full screen: each press of the `Close` switch moves to the next; no press for 3 s chooses it
+- With the **`BattSW` option** on, the MK3's **SW1–SW6 buttons** pick directly (button n on = profile n; if several are on,
+  the last one switched on). Press the button before powering up and it is sent after connecting without any input
+- The **`BattSel` option** is for a pot or slider (6 equal steps). SW1–SW6 are separate two-position switches, so on
+  `BattSel` they only give 1 or 6
+- **Step with trim buttons** (no full screen needed): the side wheel and SYS/MDL/TELE/PAGE/RTN/ENTER cannot be read as
+  switches or sources, but trim up/down can drive logical switches.
+  Example: L10 = AND, V1 = T5 down → `BattPrev` = L10 / L11 = AND, V1 = T5 up → `Close` = L11.
+  T5 must not be used by the mixer (pressing it still moves the trim value). Not yet tried on a radio
+- The picker stays until you choose (or arm). Arming closes it at once keeping the current profile (nothing is sent while
+  armed). Set Settings > Flight "Picker keeps after" to 1 or more to close it after that many seconds, keeping the current profile
+- Choosing sends `MSP_SET_BATTERY_PROFILE` (176) over CRSF; success when the `BAT#` sensor changes ("battery profile, N").
+  Resent every 2 s, 3 tries ("battery profile not changed")
+- The FC keeps this in RAM only (not saved), so you pick it after every power-up
+- Name the tiles in Settings > Packs (e.g. "6S 5000"); capacities are read from the FC on connect. Disable with
+  `CONFIG.batteryProfile.enabled = false`
+- Source references: [docs/rotorflight_notes.md](docs/rotorflight_notes.md)
+
+## Alarms (voice + haptic)
+
+Checked by ALARMS and `CONFIG.alarm` in `core.lua`, also while the widget is not on screen (`background()`).
+
+| Level | Vibration | Voice | Items |
+|---|---|---|---|
+| Critical | Pattern | Every 10 s (charge every 20 s) | Charge ≤ `BattLand` (default 20 %): "battery, NN percent", "land now" (then the charge at every 1 % lower), cell voltage < 3.50 V (2 s), ESC ≥ 90 °C, BEC < 6.0 V, headspeed lost (FALLBACK), link lost with the rotor turning |
+| Caution | One short | Once | Charge ≤ `BattLand` + 10 %, cell voltage < 3.60 V (2 s), ESC ≥ 80 °C, flight time (`flightTimeSec`, off by default), arming disabled (ARMD ≠ 0), pack not full |
+| Info | See below | On change | Armed / disarmed, rates (RTE#), profile (PID#), battery profile (also the current one after connecting), governor state, charge in 10 % steps (1 % below land-now) |
+
+- **Vibration**: once when arming, twice when disarming, once when the rates / PID profile changes (one switch moves both, so once)
+- **Sound effects** (playTone) before the voice: connect (two rising), disconnect (two falling), caution (twice),
+  critical (three high). Turn on/off and preview (Test) in Settings > Voice > Sound effects; the Mute switch silences them
+  with the voice. Pitch and length in `CONFIG.alarm.toneEffects`
+- EdgeTX itself announces connect / disconnect, so the widget doesn't (`CONFIG.alarm.edgetxLinkVoice = true`).
+  The widget's reports right after connecting (arm, rates, profile, battery profile, picker prompt) wait 3 s so they don't
+  overlap the EdgeTX voice (`connectQuietSec`). Link loss with the rotor turning only vibrates.
+  Turning off EdgeTX's connect voice (the model's "disable telemetry alarms") also stops the RSSI/RQly warnings, so it isn't recommended
+- Voice files are in `sdcard/SOUNDS/rf/<voice>/` (Japanese made with VOICEVOX, English with Piper;
+  [docs/voicevox_script.md](docs/voicevox_script.md)). Loudness is normalised to −14 dBFS RMS
+- A backup with EdgeTX's own functions: [docs/alarms_native.md](docs/alarms_native.md); after setting it up, `CONFIG.alarm.nativeBackup = true`
+
+## Configuration
+
+**In the code** — `CONFIG` at the top of `core.lua`
+
+| Key | Default | |
+|---|---|---|
+| `theme` | `"color"` | `"color"` / `"mono"` / `"cyan"` (the radio's Theme option and Settings take priority) |
+| `showModelImage` | `true` | Show the model picture (`/IMAGES/<model>.png`) |
+| `modelImageW` / `modelImageH` | 186 / 46 | Size of the picture file (make it exactly this size) |
+| `vCellGood` / `vCellWarn` | 3.8 / 3.6 | Cell-voltage colour thresholds |
+| `escTempWarn` | 90 | ESC temperature warning (°C) |
+| `rpmRunningThreshold` | 50 | Headspeed counted as turning (for recording maxima / minima) |
+| `flightLogTimeoutSec` | 0 | Seconds until the flight log closes by itself (0 = never; also in Settings) |
+| `txBattery.minV` / `maxV` | 6.4 / 8.4 | Radio battery % range (only when Radio Setup's battery range can't be read) |
+| `sensors.*` | — | Candidate sensor names (the first is the one confirmed on the radio) |
+
+**On the radio** — long-press the widget → Edit
+
+| Option | |
+|---|---|
+| `Theme` | `0`=color / `1`=mono / `2`=cyan (a number) |
+| `Mute` | Source to mute (a switch such as SA, or a logical switch). While it is above 0 (switch down / LS true) voice and caution vibrations stop; critical vibrations don't. Empty = no mute |
+| `Close` | Source that closes the flight log (a push button such as SH): back to standby at the press. Works without full screen (in full screen a tap or ENTER also closes it). On the picker it steps to the next profile; it also closes the full-charge window |
+| `BattLand` | Land-now charge % (10–50, default 20) |
+| `BattSW` | When on, the SW1–SW6 buttons pick battery profiles 1–6 |
+| `BattSel` | Pot or slider that picks the battery profile (6 steps; not for the SW buttons; empty = not used) |
+| `BattPrev` | One profile back on the picker (`Close` goes forward). Meant for a trim → logical switch |
+| `Page` | Switch that steps through the FC settings viewer pages |
+| `Voice` | Alarm voice. `0`=No.7 (announcer) / `1`=Aoyama Ryusei / `2`=Kurono Takehiro / `3`=Meimei Himari / `4`=Voidoll / `5`=Zundamon / `6`=English male / `7`=English female |
+
+**Model pictures**: put a PNG named after the model (e.g. `GOOSKY S2.png`) in `/IMAGES`. It is drawn **1:1**, so make a
+**186×46 transparent canvas with the scaled-down model centred** on it. For the simple screen, `<model>-L.png` (320×124).
+While connected, when the model takes the FC's name, that name is looked up. Pictures made from manufacturers' images are
+not in the repository for copyright reasons; please make your own.
+
+## Sensor names (confirmed from the radio's 42-sensor telemetry list)
+
+| Use | Name | Use | Name |
+|---|---|---|---|
+| Governor state | `Gov` | Headspeed | `Hspd` |
+| Voltage / cell voltage / cell count | `Vbat` / `Vcel` / `Cel#` | Current | `Curr` |
+| ESC temperature | `Tesc` | Charge % | `Bat%` |
+| Used capacity (mAh) | `EscC` | Throttle | `Thr` |
+| BEC voltage | `Vbec` | Rates profile / PID profile | `RTE#` / `PID#` |
+| Arming flags | `ARM` | Arming disable flags | `ARMD` |
+| Battery profile | `BAT#` | Link quality | `RQly` (`1RSS`, `RSNR`, `RSSI`) |
+
+- `ARM`: `0`/`2` = disarmed, `1`/`3` = armed
+- `ARMD`: non-zero shows the full-screen warning. `67108872` means "the model was powered up with the arm switch on"
+- Used capacity and charge go back to 0 on disarm, so the maximum used / minimum charge are only recorded while the rotor turns
+
+## Development
+
+### VS Code
+
+Edit core.lua / view.lua / rf2ui.lua in `sdcard/WIDGETS/RotorHUD/`. With the `sumneko.lua` extension,
+`.luarc.json` and `types/edgetx.lua` give EdgeTX API completion and type checks.
+Deploy to the SD card with the `deploy.ps1` command from Installation.
+
+### Simulator (EdgeTX Companion 2.12)
+
+Needs Companion 2.12.0 (`C:\Program Files (x86)\EdgeTX\Companion 2.12`) and uses the TX16S MK3 800×480 simulator.
+
+```powershell
+# Start (Theme: 0=color / 1=mono / 2=cyan). The first run creates the SD image in sim\sdcard
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sim.ps1 -Theme 0
+# Save the LCD 1:1 at 800x480 (sim\captures\). One scenario loop = 140 s
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sim-capture.ps1 -Count 25 -Interval 6
+```
+
+- `sim.ps1` copies `sdcard\` to `sim\sdcard` and sets `CONFIG.simulate = true` **in the copy only**
+  (`sdcard\`'s core.lua stays false). It also creates a "RotorHUD Sim (TX16S MK3)" profile in Companion.
+- With `simulate = true`, `readTelemetry` returns the `simulateTelemetry` scenario
+  (standby → arming warning → spool-up → flight → low voltage, hot ESC → throttle off → disarm → flight log).
+- `sim-capture.ps1` clicks the simulator's camera button (copies the LCD to the clipboard). The button position was
+  measured on a 2560×1440 display; adjust `-ButtonX/-ButtonY` for other layouts.
+- Whether the simulator draws fonts exactly like the radio is not known, so final checks are done on the radio.
+- `sim\` is in .gitignore (SD image and captures). The model and radio settings come from `scripts\sim-template\`.
+
+### Headless tests (tools/luatest)
+
+`cd tools/luatest; npm install; npm test` (Node + fengari, with stand-ins for EdgeTX, lvgl and file I/O).
+`node run.js ../../sdcard/WIDGETS/RotorHUD/main.lua driver.lua [ui|full|simple|cpu longflight|...]` runs single scenarios,
+`decoder_test.lua` checks the decoder and MSP.
+
+### Making the voices
+
+- Japanese: `tools/voice/voices.csv` (lines) and `voicesets.csv` (voices) → `make_voices.ps1` (needs VOICEVOX)
+- English: `tools/voice/voices_en.csv` → `make_voices_en.py` (needs Piper and the voice models; usage at the top of the script)
+
+### Folders
+
+```
+RotorHUD/
+├─ sdcard/                      Same layout as the SD card root (deploy copies it as is)
+│  ├─ WIDGETS/RotorHUD/         The widget (main.lua entry / core.lua / view.lua / rf2ui.lua)
+│  ├─ IMAGES/                   Radio battery icons (add your own model pictures)
+│  └─ SOUNDS/rf/<voice>/        Alarm voices (6 Japanese, 2 English; credits and terms in CREDITS.txt)
+├─ tools/diagtest/sdcard/       Diagnostic widgets (font / bitmap measurement DiagTest, drawing speed DrawBench / LvglBench)
+├─ tools/voice/                 Voice lines and generator scripts (VOICEVOX / Piper)
+├─ tools/luatest/               Headless tests (Node + fengari)
+├─ types/edgetx.lua             EdgeTX API declarations for lua-language-server (used parts only)
+├─ scripts/deploy.ps1           Copy to the SD card
+├─ scripts/sim.ps1, sim-capture.ps1, sim-template/   Simulator start, LCD capture
+├─ docs/
+│  ├─ images/                   README screenshots
+│  ├─ architecture.md           Files, processing flow, screen transitions (Japanese)
+│  ├─ project_summary.md        Notes (Japanese)
+│  ├─ voicevox_script.md        How the voices are made and when they play (Japanese)
+│  ├─ alarms_native.md          Alarm backup with EdgeTX's own functions (Japanese)
+│  ├─ rotorflight_notes.md      Governor states and arming-disable flags from the Rotorflight 4.6 source (Japanese)
+│  └─ mockups/                  HTML mock-ups of GUI ideas
+└─ .luarc.json, .editorconfig, .gitignore
+```
+
+### Values measured on the radio (this radio and firmware)
+
+Measured with `lcd.sizeText("0123456789")`; other radios or versions need measuring again (`tools/diagtest`).
+
+| Font | Char width | Height |
+|---|---|---|
+| (default) | 12 | 27 |
+| `SMLSIZE` | 10 | 23 |
+| `MIDSIZE` | 19 | 42 |
+| `DBLSIZE` | 25 | 55 |
+| `XXLSIZE` | 51 | 93 |
+
+- `getTime()` counts in **10 ms (1/100 s)**; divide by 100 for seconds
+- Touch, keys and lvgl buttons only work **while the widget is full screen** (EdgeTX 2.12)
+- EdgeTX's Lua (5.3) does not allow string method calls (`s:match()` etc.), so the code uses `string.match(s, ...)`.
+  Also `12.5 == math.floor(12.5)` is true there, so whole numbers are checked with `isWhole`
+- Too many Lua instructions in one frame stop the widget with "CPU limit". `cpu longflight` in luatest reports the
+  maximum per screen (about 30,000 stopped it; the current maximum is about 16,000, on the frame that opens the flight log)
+
+## Notes and untested items
+
+- Developed while testing on a real radio (TX16S MK3). Not yet tried on the radio:
+  trim → logical-switch operation, the CMS-menu hint on the arming warning
+- Still in development: screens, settings and file locations may change
+- If `scripts/deploy.ps1` doesn't suit your setup, copy the contents of `sdcard/` to the SD root by hand
+  (deleting `WIDGETS/RotorHUD/*.luac` on the SD card makes sure the new files are used)
+- EdgeTX 2.12 widget options have no string choice (VALUE/COLOR/SOURCE/BOOL), so Theme and others are numbers
+- The type declarations (`types/edgetx.lua`) cover only the APIs in use; undeclared globals give warnings, so add them as needed

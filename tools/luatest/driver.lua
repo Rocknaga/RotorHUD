@@ -90,6 +90,10 @@ playTone = function() tones = tones + 1 end
 -- EdgeTX-style io (io.open/io.write(f, ...)/io.read(f, n)/io.close(f)) on an
 -- in-memory file system, so settings, history and logs can be checked
 MEMFS = {}
+-- "settingsoff" / "settingson": a settings.txt saved on the SD before start
+-- (Off must load as false: "0" once came back as a truthy 0)
+if opts.settingsoff then MEMFS["/WIDGETS/RotorHUD/settings.txt"] = "simple=0\nhaptic=0\n" end
+if opts.settingson then MEMFS["/WIDGETS/RotorHUD/settings.txt"] = "simple=1\nhaptic=1\n" end
 io = {
   open = function(path, mode)
     mode = mode or "r"
@@ -296,6 +300,12 @@ end
 debug.sethook()
 oprint(string.format("haptic pulses: %d, tones: %d, draw calls: %d, lvgl builds: %d", haptics, tones, draws, LVSTUB.builds))
 for _, s in ipairs(LVSTUB.issues) do oprint("LVGL " .. s) end
+if opts.settingsoff or opts.settingson then
+  local sawSimple = false
+  for _, sc in ipairs(screens) do if sc == "simple" then sawSimple = true end end
+  if sawSimple ~= (opts.settingson == true) then oprint("CHECK FAIL: simple screen from settings.txt: " .. tostring(sawSimple)) end
+  if (haptics > 0) ~= (opts.settingson == true) then oprint("CHECK FAIL: vibration from settings.txt: " .. haptics) end
+end
 if opts.ui then
   local set = MEMFS["/WIDGETS/RotorHUD/settings.txt"] or ""
   if not string.find(set, "pack1=6S 5000\n", 1, true) then oprint("CHECK FAIL: pack name not saved: " .. set) end
