@@ -997,6 +997,13 @@ function LV.update(wgt, t, screen, connected, armed)
     if t.temp and t.temp >= CONFIG.escTempWarn then
       warnings[#warnings + 1] = string.format("Esc temp high: %d\194\176C", math.floor(t.temp))
     end
+    -- arming-disable flags set while armed (e.g. RX FAILSAFE): here, not the
+    -- arm-warning screen, so the dashboard stays up in flight
+    if armed and t.armd and t.armd ~= 0 then
+      local names = {}
+      for i, r in ipairs(decodeArmd(t.armd)) do names[i] = r[2] end
+      warnings[#warnings + 1] = "FC: " .. ((#names > 0) and table.concat(names, " / ") or ("code " .. fmt(t.armd, 0)))
+    end
     v.warn = (#warnings > 0) and warnings[math.floor(getTime() / 200) % #warnings + 1] or ""
   end
 
@@ -1130,7 +1137,10 @@ function LV.screenType(wgt, t)
   if wgt.settings then return "settings" end
   if wgt.history then return "history" end
   if not isTelemetryConnected(t) then return wgt.showFlightLog and "flightlog" or "standby" end
-  if wgt.armWarningActive then return "armwarning" end
+  -- the arm warning only while disarmed: armed, the flags go to the top bar
+  -- (LV.update), never covering the dashboard in flight
+  local armed = t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1
+  if wgt.armWarningActive and not armed then return "armwarning" end
   if wgt.bp and wgt.bp.phase ~= "wait" then return "battselect" end
   if wgt.infoView and FC.pages[wgt.infoView] then return "fcview" end
   return CONFIG.simple.on and "simple" or "dashboard"

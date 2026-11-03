@@ -171,6 +171,12 @@ if opts.msp then patch("if CONFIG%.simulate then %-%- no FC", "if false then -- 
 if opts.armdthr then patch("t%.armd = 67108872", "t.armd = 67108864 + 128 + 256") end
 -- Settings > Display > Simple screen on
 if opts.simple then patch("simple = { on = false", "simple = { on = true") end
+-- "armdflight": RX FAILSAFE (ARMD bit 2, "RX LOSS") while armed, 30..40 s: the dashboard
+-- must stay (flags in the top bar), not the arm-warning screen
+if opts.armdflight then
+  patch("t%.perCellVoltage = t%.voltage / SIM_CELLS",
+    "t.perCellVoltage = t.voltage / SIM_CELLS; local s2 = (getTime() / 100) %% 140; if t.armFlags == 1 and s2 > 30 and s2 < 40 then t.armd = 4 end")
+end
 -- "nil_<field>": that telemetry field missing (a sensor the FC doesn't send)
 for k in pairs(opts) do
   local f = k:match("^nil_(.+)$")
@@ -292,6 +298,10 @@ for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
       ARMD_SHOW = nil
       print("SHOWN " .. table.concat(LVSTUB.texts(), " | "))
     end
+    if opts.armdflight and NOW > 3000 and NOW < 4000 then
+      if wgt.lastScreenType == "armwarning" then ARMWARN_IN_FLIGHT = true end
+      if string.find(table.concat(LVSTUB.texts(), "|"), "FC: RX LOSS", 1, true) then FC_WARN_SEEN = true end
+    end
     local st = wgt.lastScreenType or "?"
     if instr > (maxInstr[st] or 0) then maxInstr[st] = instr end
     lastInstr[st] = instr
@@ -305,6 +315,12 @@ end
 debug.sethook()
 oprint(string.format("haptic pulses: %d, tones: %d, draw calls: %d, lvgl builds: %d", haptics, tones, draws, LVSTUB.builds))
 for _, s in ipairs(LVSTUB.issues) do oprint("LVGL " .. s) end
+if opts.armdflight then
+  for _, sc in ipairs(screens) do
+    if sc == "armwarning" and ARMWARN_IN_FLIGHT then oprint("CHECK FAIL: arm warning screen while armed") end
+  end
+  if not FC_WARN_SEEN then oprint("CHECK FAIL: no FC warning in the top bar while armed") end
+end
 if opts.settingsoff or opts.settingson then
   local sawSimple = false
   for _, sc in ipairs(screens) do if sc == "simple" then sawSimple = true end end

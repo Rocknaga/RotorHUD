@@ -19,7 +19,8 @@ ARM 警告、フライトログ、バッテリープロファイルの選択、�
   Battery バー (% / mAh)、Throttle バー (% / ℃)
 - **シンプル表示**: スロットルとバッテリー残量の円弧、大きな機体画像、飛行時間・電流・ESC 温度のバーで構成した、ひと目で読める画面
 - **接続状態に合わせた画面切替**: 待機 ("Waiting for connection") → ダッシュボード。
-  `ARMD` ≠ 0 のときは全画面の ARM 警告 (原因と対処も表示)、切断後はフライトログを表示します
+  DISARM 中に `ARMD` ≠ 0 のときは全画面の ARM 警告 (原因と対処も表示)、切断後はフライトログを表示します。
+  ARM 中に FC がアーム不可のフラグを立てた場合 (フェイルセーフなど) は、画面を切り替えずトップバーに赤く `FC: …` と表示します
 - **再接続で全リセット**: 最大・最小値とフライトタイマーを初期化してから表示します
 - **接続直後のバッテリープロファイル選択**と、**満充電チェック** (満充電でなければお知らせ)
 - **メニュー** (全画面時、DISARM 中): Rotorflight 設定 (タッチ対応の画面)、バッテリープロファイル、
@@ -436,8 +437,9 @@ with an arming warning, a post-flight log, a battery-profile picker and voice + 
   Battery bar (% / mAh), Throttle bar (% / °C)
 - **Simple screen**: throttle and battery arcs, a large model picture and bars for flight time, current and ESC temperature,
   readable at a glance
-- **Screens follow the link state**: standby ("Waiting for connection") → dashboard. While `ARMD` ≠ 0 a full-screen
-  arming warning (with the cause and what to do); after the link drops, the flight log
+- **Screens follow the link state**: standby ("Waiting for connection") → dashboard. While disarmed with `ARMD` ≠ 0, a
+  full-screen arming warning (with the cause and what to do); after the link drops, the flight log. When the FC sets an
+  arming-disable flag while armed (failsafe etc.), the screen is not switched; the top bar shows `FC: …` in red
 - **Full reset on reconnect**: maxima/minima and the flight timer start over
 - **Battery-profile picker right after connecting**, and a **full-charge check** (tells you when the pack isn't full)
 - **Menu** (full screen, disarmed): Rotorflight settings (touch UI), battery profile, FC settings viewer,
