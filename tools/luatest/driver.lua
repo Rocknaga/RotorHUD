@@ -162,6 +162,8 @@ if opts.native then patch("nativeBackup = false,", "nativeBackup = true,") end
 if opts.msp then patch("if CONFIG%.simulate then %-%- no FC", "if false then -- no FC") end
 -- ARMD with real reasons: THROTTLE (bit 7) + ANGLE (bit 8) + ARM_SWITCH (bit 26)
 if opts.armdthr then patch("t%.armd = 67108872", "t.armd = 67108864 + 128 + 256") end
+-- the FC's CMS menu open (16384, seen on the radio 2026-11-03): reason + 3 hint lines
+if opts.armdcms then patch("t%.armd = 67108872", "t.armd = 16384") end
 -- Governor FALLBACK (no headspeed signal) for 6s mid-flight
 if opts.fallback then
   patch('t%.armFlags, t%.gov = 1, "ACTIVE"', 't.armFlags, t.gov = 1, (s > 50 and s < 56) and "FALLBACK" or "ACTIVE"')
@@ -207,19 +209,23 @@ debug.sethook(function() if not LVSTUB.inC then instr = instr + 100 end end, "",
 -- "ui": taps (full screen) at fixed times; each must find its button
 local UI_STEPS = {
   { 100, "Menu" }, { 120, "Settings" }, { 140, "Alarms" }, { 150, "+" }, { 160, "Display" },
-  { 170, "Mono" }, { 180, "Color" }, { 185, "Flight" }, { 187, "+" }, { 190, "Voice" }, { 200, "Close" },
+  { 170, "Mono" }, { 180, "Color" }, { 185, "Flight" }, { 187, "+" }, { 188, "Packs" }, { 193, "edit", "Profile 1", "6S 5000" },
+  { 197, "Voice" }, { 205, "Close" },
   { 7320, "Menu" }, { 7340, "View FC settings" }, { 7360, "Next" }, { 7380, "Next" }, { 7400, "Close" },
+  { 7410, "Menu" }, { 7420, "Erase blackbox" }, { 7430, "Tap again: erase (25% used)" },
   { 7700, "Close" },
-  { 7900, "Menu" }, { 7920, "Flight history" }, { 8000, "Close" },
+  { 7900, "Menu" }, { 7920, "Flight history" }, { 7950, "Reset" }, { 7960, "Sure?" }, { 8000, "Close" },
 }
 local uiDone = {}
 function UI(now)
   for i, s in ipairs(UI_STEPS) do
     if not uiDone[i] and now >= s[1] then
       uiDone[i] = true
-      local ok = LVSTUB.press(s[2])
+      local ok
+      if s[2] == "edit" then ok = LVSTUB.edit(s[3], s[4]) else ok = LVSTUB.press(s[2]) end
       print(string.format("TAP %-18s %s  (screen %s)", s[2], ok and "ok" or "NOT FOUND", tostring(wgt.lastScreenType)))
       if s[2] == "Flight history" then UI_SHOW = now + 10 end
+      if s[2] == "Sure?" then UI_RESET = now + 10 end
     end
   end
 end
@@ -250,18 +256,37 @@ for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
       -- the flight that ended at 75s must be in the history
       if not string.find(shown, "Flights | 1 |", 1, true) then print("CHECK FAIL: flight history not recorded/read") end
     end
+    if UI_RESET and NOW >= UI_RESET then
+      UI_RESET = nil
+      local shown = table.concat(LVSTUB.texts(), " | ")
+      if not string.find(shown, "Flights | 0 |", 1, true) then print("CHECK FAIL: history not reset: " .. shown) end
+    end
+    -- the erase tapped at 74.3s is done before the link drops at 75s
+    if opts.ui and NOW == 7490 and not (wgt.toolMsg and wgt.toolMsg.text == "Blackbox erased"
+                                        and wgt.blackbox and wgt.blackbox.used == 0) then
+      print("CHECK FAIL: blackbox erase: " .. tostring(wgt.toolMsg and wgt.toolMsg.text))
+    end
+    if ARMD_SHOW and NOW >= ARMD_SHOW then
+      ARMD_SHOW = nil
+      print("SHOWN " .. table.concat(LVSTUB.texts(), " | "))
+    end
     local st = wgt.lastScreenType or "?"
     if instr > (maxInstr[st] or 0) then maxInstr[st] = instr end
     lastInstr[st] = instr
     if wgt.lastScreenType and screens[#screens] ~= wgt.lastScreenType then
       screens[#screens + 1] = wgt.lastScreenType
       print("SCREEN " .. wgt.lastScreenType)
+      if wgt.lastScreenType == "armwarning" then ARMD_SHOW = NOW + 5 end
     end
   end
 end
 debug.sethook()
 oprint(string.format("haptic pulses: %d, tones: %d, draw calls: %d, lvgl builds: %d", haptics, tones, draws, LVSTUB.builds))
 for _, s in ipairs(LVSTUB.issues) do oprint("LVGL " .. s) end
+if opts.ui then
+  local set = MEMFS["/WIDGETS/RFTelem/settings.txt"] or ""
+  if not string.find(set, "pack1=6S 5000\n", 1, true) then oprint("CHECK FAIL: pack name not saved: " .. set) end
+end
 if opts.files then for path, body in pairs(MEMFS) do oprint("FILE " .. path); oprint(body) end end
 -- Includes the stubs' own Lua (real lcd.* calls are C), so read these as
 -- relative numbers between versions, not as the radio's real count.

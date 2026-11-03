@@ -96,6 +96,19 @@ function M.press(text)
   return false
 end
 
+-- type into the visible textEdit showing value `from` (EdgeTX's keyboard
+-- hands back a buffer of `length` bytes, NUL padded)
+function M.edit(from, to)
+  for i = #M.objs, 1, -1 do
+    local o = M.objs[i]
+    if o.type == "textEdit" and o.value == from then
+      o.set(to .. string.rep("\0", math.max(0, (o.length or 32) - #to)))
+      return true
+    end
+  end
+  return false
+end
+
 function M.texts()
   local out = {}
   for _, o in ipairs(M.objs) do

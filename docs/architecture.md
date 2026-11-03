@@ -58,8 +58,12 @@ PID# が変わると再要求) → MSP_DATAFLASH_SUMMARY (70、ブラックボ�
 - ARM・全画面解除で閉じる (`stopTool`)
 
 ## 設定と履歴
-- `SETTINGS` (core): group / label / kind (number・bool・choice) / apply。Settings 画面はここから自動で作る。値は settings.txt
-- `HIST` (core): 切断時に CSV へ 1 行、stats-<機体名>.txt の合計・パック・直近を更新。履歴画面は stats を読む
+- `SETTINGS` (core): group / label / kind (number・bool・choice・text) / apply。Settings 画面はここから自動で作る。値は settings.txt
+  (text = パック名、lvgl textEdit。EdgeTX は length バイトの NUL 詰めで返すので SET.set で制御文字と前後の空白を落とす)
+- `HIST` (core): 切断時に CSV へ 1 行、stats-<機体名>.txt の合計・パック・直近を更新。履歴画面は stats を読む。
+  `HIST.reset` は stats だけ空に (履歴画面の Reset)
+- ブラックボックス消去 (`FC.eraseUpdate`、tick から): `wgt.erase` があれば MSP_DATAFLASH_ERASE (72) → 応答後 2 秒ごとに
+  MSP_DATAFLASH_SUMMARY (70)、flags bit0 (ready) で完了。60 秒で打ち切り、切断で中止。進行は wgt.toolMsg (色付きの帯)
 
 ## 検証
 - `tools/luatest`: `node run.js ../../sdcard/WIDGETS/RFTelem/main.lua driver.lua [args]`。lvgl と io の代役付き

@@ -311,6 +311,15 @@ function LV.buildArmWarning(k, wgt, w, h, armd)
     local reasonText = (#names > 0) and table.concat(names, " / ") or "unknown"
     LV.text(k, 30, cy + 78, w - 60, reasonText, fitFontMeasured(w - 60, 42, reasonText, MIDSIZE), COLOR.white, CENTER)
     LV.text(k, 20, cy + 114, w - 40, "code " .. fmt(armd, 0), SMLSIZE, COLOR.dim, CENTER)
+    -- what to do, for the first reason that has a hint (ARMD_REASONS [4])
+    for i = 1, #reasons do
+      if reasons[i][4] then
+        for n, line in ipairs(reasons[i][4]) do
+          LV.text(k, 20, cy + 124 + n * 26, w - 40, line, SMLSIZE, COLOR.white, CENTER)
+        end
+        break
+      end
+    end
   end
 end
 
@@ -561,7 +570,12 @@ function LV.buildSettings(k, wgt, w, h)
       local mid = ry + bh / 2
       LV.text(k, rx + 16, mid, 174, def.label, LV.fitFont(def.label, 170, 0), COLOR.white)
       local key = "set_" .. def.key
-      if def.kind == "number" then
+      if def.kind == "text" then -- EdgeTX opens its keyboard on tap
+        k[#k + 1] = { type = "textEdit", x = x0, y = ry, w = 300, h = bh, value = tostring(SET.value(wgt, def) or ""),
+          length = def.length, set = function(s) SET.set(def, s) end }
+        local cap = def.pack and wgt.battCaps and wgt.battCaps[def.pack]
+        if cap and cap > 0 then LV.text(k, x0 + 312, mid, 90, cap .. "mAh", SMLSIZE, COLOR.dim) end
+      elseif def.kind == "number" then
         LV.button(k, x0, ry, 96, bh, "-", function() SET.set(def, SET.value(wgt, def) - def.step) end, MIDSIZE)
         LV.text(k, x0 + 100, mid, 156, LV.dv(key, ""), MIDSIZE, COLOR.white, CENTER)
         LV.button(k, x0 + 260, ry, 96, bh, "+", function() SET.set(def, SET.value(wgt, def) + def.step) end, MIDSIZE)
@@ -607,8 +621,18 @@ function LV.buildHistory(k, wgt, w, h)
   local tx = LV.ICON + 4 -- right of the Touch badge
   LV.rect(k, tx, y, w - pad - tx, titleH, COLOR.panel, 6)
   LV.text(k, tx + 14, y + titleH / 2, 260, "Flight history", MIDSIZE, COLOR.white)
-  LV.text(k, tx + 280, y + titleH / 2, 220, name, SMLSIZE, COLOR.dim)
+  LV.text(k, tx + 280, y + titleH / 2, 150, name, SMLSIZE, COLOR.dim)
   LV.button(k, w - pad - 4 - 140, y + 4, 140, titleH - 8, "Close", function() wgt.history = nil end, MIDSIZE)
+  -- Reset: the first tap asks (3 s), the second clears the totals (the CSV stays)
+  LV.button(k, w - pad - 4 - 140 - 8 - 130, y + 4, 130, titleH - 8, "", function()
+    local now = getTime()
+    if wgt.histReset and now - wgt.histReset <= 300 then
+      HIST.reset(name)
+      wgt.histReset, wgt.histCache, wgt.histGen = nil, nil, (wgt.histGen or 0) + 1
+    else
+      wgt.histReset = now
+    end
+  end, MIDSIZE, { text = LV.dv("histResetText", "Reset"), color = LV.dv("histResetColor", COLOR.barBg) })
 
   -- totals
   local panelW = w - pad * 2
@@ -649,8 +673,9 @@ function LV.buildHistory(k, wgt, w, h)
       local ry = cy + 30 + row * rowH + rowH / 2
       row = row + 1
       local cap = wgt.battCaps and wgt.battCaps[i]
-      local label = "#" .. i .. ((cap and cap > 0) and ("  " .. cap) or "")
-      LV.text(k, px, ry, 110, label, 0, COLOR.white)
+      local label = CONFIG.batteryProfile.labels[i]
+      if not label or label == "Profile " .. i then label = "#" .. i .. ((cap and cap > 0) and ("  " .. cap) or "") end
+      LV.text(k, px, ry, 110, label, LV.fitFont(label, 110, 0), COLOR.white)
       LV.text(k, px + 110, ry, 70, tostring(p.n), 0, COLOR.white, RIGHT)
       LV.text(k, px + 180, ry, 60, string.format("%.1f", p.mah / 1000), 0, COLOR.white, RIGHT)
       LV.text(k, px + 250, ry, 60, string.sub(p.last, 6, 10), SMLSIZE, COLOR.dim, RIGHT) -- MM/DD
@@ -682,7 +707,7 @@ end
 -- menu card over standby / dashboard (Rotorflight / ExpressLRS / battery)
 function LV.buildMenu(k, wgt, w, h)
   -- large targets: 60px rows across a 600px card, Close in the header
-  local mw, rowH, gap = 600, 60, 8
+  local mw, rowH, gap = 600, 52, 6
   local headH = 60
   local mh = headH + #MENU_ITEMS * (rowH + gap) + 6
   local mx, my = math.floor((w - mw) / 2), math.floor((h - mh) / 2)
@@ -693,15 +718,16 @@ function LV.buildMenu(k, wgt, w, h)
   LV.button(k, mx + mw - 14 - 150, my + 8, 150, headH - 12, "Close", function() wgt.menu = nil end, MIDSIZE, { visible = vis })
   for i, item in ipairs(MENU_ITEMS) do
     local ry = my + headH + (i - 1) * (rowH + gap)
-    LV.button(k, mx + 14, ry, mw - 28, rowH, item.label, function()
+    LV.button(k, mx + 14, ry, mw - 28, rowH, "", function()
       if wgt.menu and wgt.lastT then openMenuItem(wgt, wgt.lastT, LV.v.connected, item.key) end
-    end, MIDSIZE, { visible = vis, textColor = LV.dv("menuColor" .. i, COLOR.white) })
+    end, MIDSIZE, { visible = vis, text = LV.dv("menuText" .. i, item.label),
+      textColor = LV.dv("menuColor" .. i, COLOR.white) })
   end
 end
 
 function LV.buildToolMsg(k, wgt, w, h)
   local vis = function() return LV.v.toolMsg ~= nil end
-  LV.rect(k, 40, h - 64, w - 80, 44, COLOR.red, 6, { visible = vis })
+  LV.rect(k, 40, h - 64, w - 80, 44, COLOR.red, 6, { visible = vis, color = LV.dv("toolMsgColor", COLOR.red) })
   LV.text(k, 50, h - 42, w - 100, LV.dv("toolMsg", ""), SMLSIZE, COLOR.white, CENTER, { visible = vis })
 end
 
@@ -763,7 +789,8 @@ function LV.update(wgt, t, screen, connected, armed)
   v.full = okFull and full or false
   local info = model and model.getInfo and model.getInfo()
   v.model = info and info.name or ""
-  if wgt.toolMsg and getTime() - wgt.toolMsg.at <= 300 then v.toolMsg = wgt.toolMsg.text
+  if wgt.toolMsg and getTime() - wgt.toolMsg.at <= 300 then
+    v.toolMsg, v.toolMsgColor = wgt.toolMsg.text, wgt.toolMsg.color or COLOR.red
   else wgt.toolMsg, v.toolMsg = nil, nil end
   local ok, dt = pcall(getDateTime)
   if not ok then dt = nil end
@@ -881,6 +908,10 @@ function LV.update(wgt, t, screen, connected, armed)
     v.closeText = (CONFIG.flightLogTimeoutSec > 0) and ("Close  " .. remain .. "s") or "Close"
   end
 
+  if screen == "history" then
+    local asking = wgt.histReset and getTime() - wgt.histReset <= 300
+    v.histResetText, v.histResetColor = asking and "Sure?" or "Reset", asking and COLOR.red or COLOR.barBg
+  end
   if screen == "settings" and wgt.settings then
     for _, def in ipairs(SETTINGS) do
       if def.group == wgt.settings.group then v["set_" .. def.key] = SET.text(wgt, def) end
@@ -891,6 +922,12 @@ function LV.update(wgt, t, screen, connected, armed)
     for i, item in ipairs(MENU_ITEMS) do
       local okItem, why = menuItemState(wgt, t, connected, item.key)
       v["menuColor" .. i] = okItem and COLOR.white or COLOR.muted
+      v["menuText" .. i] = item.label
+      if item.key == "erase" and wgt.menu.eraseAt and getTime() - wgt.menu.eraseAt <= 300 and wgt.blackbox then
+        local bb = wgt.blackbox
+        v["menuText" .. i] = "Tap again: erase (" .. math.floor(bb.used * 100 / math.max(bb.total, 1)) .. "% used)"
+        v["menuColor" .. i] = COLOR.orange
+      end
       if not okItem then notes[#notes + 1] = item.label .. ": " .. why end
     end
     v.menuNote = notes[1] or ""
@@ -983,6 +1020,8 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
     sub = wgt.infoView .. ":" .. tostring(buf) .. ":" .. tostring(wgt.fcProf)
   elseif screen == "settings" then
     sub = "set:" .. wgt.settings.group
+  elseif screen == "history" then
+    sub = "hist:" .. (wgt.histGen or 0)
   end
   -- The flight log's sample statistics (up to 400 samples) get a frame of
   -- their own before the screen is built: both in one frame came close to

@@ -105,6 +105,7 @@ EdgeTX の lvgl ウィジェット (EdgeTX 2.11 以降)。各画面を 1 回組�
 | Rotorflight settings | 公式 RF2 の設定ツールをウィジェット内で動かし、画面を RF Telem 調にしたもの (下記)。接続中のみ |
 | Battery profile | 接続直後と同じプロファイル選択画面。接続中で `BAT#` があるとき |
 | View FC settings | PID ゲイン / レート / ガバナープロファイルの閲覧 (下記)。接続中のみ |
+| Erase blackbox | FC のブラックボックス (dataflash) を消去。1 回目のタップで行が「Tap again: erase (NN% used)」(オレンジ、3 秒) になり、もう一度で消去。進行と結果は下の帯 (Erasing… → 緑の Blackbox erased + 確認音・振動)。接続中でブラックボックス情報 (MSP 70) が読めたときのみ |
 | Flight history | この機体の飛行履歴 (下記) |
 | Settings | 音声・アラーム・飛行・表示の設定 (下記) |
 
@@ -129,7 +130,8 @@ EdgeTX の lvgl ウィジェット (EdgeTX 2.11 以降)。各画面を 1 回組�
 - 飛行ごと (ローター回転 10 秒以上、`CONFIG.history.minSec`) に、切断の時点で記録する
   - `/LOGS/RFTelem-<機体名>.csv`: 1 飛行 1 行 (日時、パック、ローター時間、消費 mAh、残量、最大 rpm・A・W、最低電圧・セル・BEC、最高 ESC 温度)
   - `/WIDGETS/RFTelem/stats-<機体名>.txt`: 合計 (回数・ローター時間・mAh・最終日時)、パック (バッテリープロファイル) ごとの回数・mAh・最終使用、直近 6 飛行
-- 画面: 合計 4 項目、パックごとの表、直近の飛行の表
+- 画面: 合計 4 項目、パックごとの表 (Settings > Packs の名前があればその名前)、直近の飛行の表
+- **Reset** (タイトル右): 1 回目で「Sure?」(赤、3 秒)、もう一度で stats を 0 に戻す。`/LOGS` の CSV は残る
 
 ### Settings
 SD の `/WIDGETS/RFTelem/settings.txt` に保存。ウィジェットオプションの同じ項目 (Theme / Voice / BattLand) より優先。
@@ -139,6 +141,7 @@ SD の `/WIDGETS/RFTelem/settings.txt` に保存。ウィジェットオプシ�
 | Voice | 声 (試聴付き)、アラーム On/Off、振動 On/Off、効果音 On/Off (試聴付き) |
 | Alarms | 着陸指示 %、セル電圧 注意/危険、ESC 温度 注意/危険、BEC |
 | Flight | 飛行時間の読み上げ、フライトログを閉じるまでの秒数、バッテリー選択を現状のまま閉じるまでの秒数 (0 = しない) |
+| Packs | バッテリープロファイル 1〜6 の名前 (例 `6S 5000`、16 文字まで。タップで EdgeTX のキーボード)。右に FC の容量。選択画面のタイルと履歴に出る。空にすると `Profile N` |
 | Display | テーマ、fps 表示、機体画像 |
 
 追加するときは `core.lua` の `SETTINGS` に 1 行 (必要なら `SET.groups` にタブ)。

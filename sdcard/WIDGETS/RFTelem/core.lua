@@ -386,30 +386,34 @@ end
 -- ARMD (Arming Disable Flags) bits, rotorflight-firmware release/4.6.0
 -- src/main/fc/runtime_config.h (the armingDisableFlagNames[] strings in
 -- runtime_config.c are stale at bits 5/6, so the enum is the source).
--- { bit, short name shown on screen, voice file }
+-- { bit, short name shown on screen, voice file [, what to do: up to 3
+-- SMLSIZE lines under the reason on the arm warning] }
 local ARMD_REASONS = {
   { 0,  "NO GYRO",       "armd_nogyro" },
   { 1,  "FAILSAFE",      "armd_failsafe" },
-  { 2,  "RX LOSS",       "armd_rxloss" },
+  { 2,  "RX LOSS",       "armd_rxloss", { "The FC gets no RC channels from the receiver" } },
   { 3,  "BAD RX",        "armd_badrx" },
   { 4,  "FAILSAFE SW",   "armd_boxfailsafe" },
   { 5,  "GOVERNOR",      "armd_governor" },
   { 6,  "RPM SIGNAL",    "armd_rpmsignal" },
   { 7,  "THROTTLE",      "armd_throttle" },
   { 8,  "ANGLE",         "armd_angle" },
-  { 9,  "BOOT GRACE",    "armd_bootgrace" },
+  { 9,  "BOOT GRACE",    "armd_bootgrace", { "The FC has just powered up - wait a few seconds" } },
   { 10, "NO PREARM",     "armd_noprearm" },
   { 11, "CPU LOAD",      "armd_load" },
   { 12, "CALIBRATING",   "armd_calib" },
-  { 13, "CLI",           "armd_cli" },
-  { 14, "CMS MENU",      "armd_cms" },
+  { 13, "CLI",           "armd_cli", { "The configurator's CLI is open", "Leave the CLI, or power-cycle the FC" } },
+  -- opened by sticks (rotorflight-firmware cms/cms.c cmsUpdate: collective
+  -- mid, yaw low, pitch high, disarmed); disarming or waiting don't close it
+  { 14, "CMS MENU",      "armd_cms", { "The FC's stick menu (CMS) is open",
+    "Opened by sticks: collective mid + yaw left + pitch forward", "Close it with Exit in the CMS, or power-cycle the FC" } },
   { 15, "BST",           "armd_bst" },
   { 16, "MSP",           "armd_msp" },
   { 17, "PARALYZE",      "armd_paralyze" },
   { 18, "GPS",           "armd_gps" },
   { 19, "RESCUE SW",     "armd_rescuesw" },
   { 20, "RPM FILTER",    "armd_rpmfilter" },
-  { 21, "REBOOT REQ",    "armd_reboot" },
+  { 21, "REBOOT REQ",    "armd_reboot", { "Changed settings need a restart - power-cycle the FC" } },
   { 22, "DSHOT BITBANG", "armd_bitbang" },
   { 23, "NO ACC CAL",    "armd_noacccal" },
   { 24, "MOTOR PROTO",   "armd_motorproto" },
@@ -567,7 +571,7 @@ SET.file = "/WIDGETS/RFTelem/settings.txt"
 
 local USER = {}
 
-SET.groups = { "Voice", "Alarms", "Flight", "Display" }
+SET.groups = { "Voice", "Alarms", "Flight", "Packs", "Display" }
 
 local SETTINGS = {
   { key = "voice", group = "Voice", label = "Voice", kind = "choice", choices = CONFIG.alarm.voiceLabels,
@@ -606,6 +610,12 @@ local SETTINGS = {
     unit = " s", zero = "Never", default = CONFIG.batteryProfile.timeoutSec,
     apply = function(v) CONFIG.batteryProfile.timeoutSec = v end },
 }
+-- battery profile names (picker tiles, history), free text typed on the radio
+for i = 1, 6 do
+  SETTINGS[#SETTINGS + 1] = { key = "pack" .. i, group = "Packs", label = "Pack " .. i, kind = "text", length = 16,
+    pack = i, default = CONFIG.batteryProfile.labels[i],
+    apply = function(v) CONFIG.batteryProfile.labels[i] = (v ~= "") and v or ("Profile " .. i) end }
+end
 
 -- current value: the user's, else the widget option, else the default
 function SET.value(wgt, def)
@@ -640,11 +650,12 @@ function SET.load()
     if not f then return end
     local text = io.read(f, 2048) or ""
     io.close(f)
-    for key, val in string.gmatch(text, "([%w_]+)=([%-%d%.]+)") do
+    for key, val in string.gmatch(text, "([%w_]+)=([^\r\n]*)") do
       for _, def in ipairs(SETTINGS) do
         if def.key == key then
           local n = tonumber(val)
-          if n then USER[key] = (def.kind == "bool") and (n ~= 0) or n end
+          if def.kind == "text" then USER[key] = val
+          elseif n then USER[key] = (def.kind == "bool") and (n ~= 0) or n end
         end
       end
     end
@@ -659,6 +670,9 @@ function SET.set(def, v)
     v = math.max(def.min, math.min(def.max, v))
     v = math.floor(v / def.step + 0.5) * def.step
     if def.decimals then v = tonumber(string.format("%." .. def.decimals .. "f", v)) end
+  elseif def.kind == "text" then -- one line in settings.txt; EdgeTX's TextEdit hands back length bytes
+    v = string.sub((string.gsub(tostring(v or ""), "%c", "")), 1, def.length or 16)
+    v = string.match(v, "^%s*(.-)%s*$")
   end
   USER[def.key] = v
   if def.apply then def.apply(v) end
@@ -669,6 +683,7 @@ function SET.text(wgt, def)
   local v = SET.value(wgt, def)
   if def.kind == "bool" then return v and "On" or "Off" end
   if def.kind == "choice" then return def.choices[(v or 0) + 1] or def.choices[1] end
+  if def.kind == "text" then return v or "" end
   if v == nil then return "--" end
   if def.zero and v == 0 then return def.zero end
   return string.format("%." .. (def.decimals or 0) .. "f", v) .. (def.unit or "")
@@ -686,8 +701,10 @@ local HIST = { MAXRECENT = 6 }
 function HIST.name(model) return (string.gsub(model or "model", "[^%w%-_]", "_")) end
 function HIST.statsPath(model) return "/WIDGETS/RFTelem/stats-" .. HIST.name(model) .. ".txt" end
 
+function HIST.empty() return { flights = 0, seconds = 0, mah = 0, last = "", packs = {}, recent = {} } end
+
 function HIST.load(model)
-  local s = { flights = 0, seconds = 0, mah = 0, last = "", packs = {}, recent = {} }
+  local s = HIST.empty()
   pcall(function()
     local f = io.open(HIST.statsPath(model), "r")
     if not f then return end
@@ -733,6 +750,10 @@ function HIST.save(model, s)
     io.close(f)
   end)
 end
+
+-- Flight history > Reset: totals, packs and recent start over. The full
+-- record (/LOGS/RFTelem-<model>.csv) is kept.
+function HIST.reset(model) HIST.save(model, HIST.empty()) end
 
 function HIST.record(wgt)
   local sec = math.floor(wgt.flightSeconds or 0)
@@ -1915,6 +1936,39 @@ local function rfMspUpdate(wgt, connected)
   end
 end
 
+-- Menu > Erase blackbox (tapped twice): MSP_DATAFLASH_ERASE (72), then
+-- MSP_DATAFLASH_SUMMARY (70) every 2 s until the flash reports ready, as
+-- RF2's PAGES/status.lua does. Progress and result in the tool banner.
+function FC.eraseUpdate(wgt, connected)
+  local e = wgt.erase
+  if not e then return end
+  local now = getTime()
+  if not connected then
+    wgt.erase, wgt.toolMsg = nil, { text = "Blackbox erase: link lost", at = now }
+    return
+  end
+  if CONFIG.simulate then
+    if now - e.since > 50 then wgt.blackbox.used, e.phase = 0, "done" end
+  elseif wgt.hosted then -- RF2 owns the queue for now
+  elseif e.phase == "send" then
+    if now - (e.askedAt or -1000) >= 150 and e.tries < 6 and mspRequest(72, {}) then
+      e.askedAt, e.tries = now, e.tries + 1
+    end
+  elseif now - e.askedAt >= 200 and mspRequest(70, {}) then
+    e.askedAt = now
+  end
+  if e.phase == "done" then
+    wgt.erase = nil
+    wgt.toolMsg = { text = "Blackbox erased", at = now, color = COLOR.green }
+    playEffect(wgt, "saved")
+    playPattern(CONFIG.alarm.hapticSaved)
+  elseif now - e.since > 6000 then
+    wgt.erase, wgt.toolMsg = nil, { text = "Blackbox erase: no answer from the FC", at = now }
+  else
+    wgt.toolMsg = { text = "Erasing blackbox...", at = now, color = COLOR.accent }
+  end
+end
+
 local function newRfTelemetryState(wgt)
   local rt = { count = 0, skip = 0, tries = {} }
   rt.onReply = function(cmd, buf, isError)
@@ -1926,7 +1980,12 @@ local function newRfTelemetryState(wgt)
     if cmd == 148 and not isError and #buf >= 2 then wgt.govTarget = FC.u16(buf, 1) end
     if cmd == 70 and not isError and #buf >= 13 then -- flags, sectors, total, used (U32 LE)
       local function u32(i) return buf[i] + buf[i + 1] * 256 + buf[i + 2] * 65536 + buf[i + 3] * 16777216 end
-      wgt.blackbox = { supported = math.floor(buf[1] / 2) % 2 == 1, total = u32(6), used = u32(10) }
+      wgt.blackbox = { ready = buf[1] % 2 == 1, supported = math.floor(buf[1] / 2) % 2 == 1, total = u32(6),
+        used = u32(10) }
+      if wgt.erase and wgt.erase.phase == "wait" and wgt.blackbox.ready then wgt.erase.phase = "done" end
+    end
+    if cmd == 72 and not isError and wgt.erase and wgt.erase.phase == "send" then
+      wgt.erase.phase, wgt.erase.askedAt = "wait", getTime()
     end
     if cmd == MSP_API_VERSION and not isError and #buf >= 3 then
       wgt.fcApi = buf[2] + buf[3] / 100 + 0.00001 -- as RF2's MSP/mspApiVersion.lua
@@ -2088,7 +2147,7 @@ local function tick(wgt)
     t = readTelemetry(wgt) -- re-read with the freshly cleared sensor cache
     bpStart(wgt)
     wgt.battCaps, wgt.fcApi, wgt.rt.tries, wgt.rt.capAskedAt = nil, nil, {}, nil
-    wgt.govTarget, wgt.blackbox, wgt.flightPack, wgt.lastPid = nil, nil, nil, nil
+    wgt.govTarget, wgt.blackbox, wgt.flightPack, wgt.lastPid, wgt.erase = nil, nil, nil, nil, nil
   end
   wgt.wasConnected = connected
 
@@ -2119,6 +2178,7 @@ local function tick(wgt)
   wgt.wasRunning = running and connected
   bpUpdate(wgt, t, connected)
   rfMspUpdate(wgt, connected)
+  FC.eraseUpdate(wgt, connected)
 
   -- Track when this disconnect started, so the flight log can
   -- auto-dismiss after a timeout - this is what makes the dismiss
@@ -2244,6 +2304,7 @@ local MENU_ITEMS = {
   { key = "rf2",  label = "Rotorflight settings" },
   { key = "batt", label = "Battery profile" },
   { key = "view", label = "View FC settings" },
+  { key = "erase", label = "Erase blackbox" },
   { key = "history", label = "Flight history" },
   { key = "settings", label = "Settings" },
 }
@@ -2256,6 +2317,10 @@ local function menuItemState(wgt, t, connected, key)
     return true, ""
   elseif key == "view" then
     return connected, "needs the model connected"
+  elseif key == "erase" then
+    if wgt.erase then return false, "erasing" end
+    local bb = wgt.blackbox
+    return connected and bb ~= nil and bb.supported and bb.total > 0, "needs blackbox info from the FC"
   end
   return connected and t.battProfile ~= nil, "needs BAT# from the FC"
 end
@@ -2263,6 +2328,15 @@ end
 local function openMenuItem(wgt, t, connected, key)
   local ok, why = menuItemState(wgt, t, connected, key)
   if not ok then wgt.toolMsg = { text = "Not available: " .. why, at = getTime() }; return end
+  if key == "erase" then -- first tap arms it for 3 s (the menu shows the question), second erases
+    local now = getTime()
+    if wgt.menu and wgt.menu.eraseAt and now - wgt.menu.eraseAt <= 300 then
+      wgt.menu, wgt.erase = nil, { phase = "send", since = now, tries = 0 }
+    elseif wgt.menu then
+      wgt.menu.eraseAt = now
+    end
+    return
+  end
   wgt.menu = nil
   if key == "batt" then
     wgt.bp = { phase = "pick", sel = t.battProfile, since = getTime() }

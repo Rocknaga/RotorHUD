@@ -92,6 +92,16 @@ crossfireTelemetryPush = function(cmd, data)
     for _, f in ipairs(mspReplyFrames(32, batteryConfigReply())) do queue[#queue + 1] = f end
   elseif cmd == 0x7C and data[5] == 1 then -- MSP_API_VERSION: protocol 0, API 12.09
     for _, f in ipairs(mspReplyFrames(1, { 0, 12, 9 })) do queue[#queue + 1] = f end
+  elseif cmd == 0x7C and data[5] == 72 then -- MSP_DATAFLASH_ERASE: empty ack, flash busy for 2 summaries
+    queue[#queue + 1] = mspReplyFrames(72, {})[1]
+    BUSY = 2
+  elseif cmd == 0x7C and data[5] == 70 then -- MSP_DATAFLASH_SUMMARY: flags, sectors, total 4 MB, used
+    local used = (ERASED and (BUSY or 0) <= 1) and 0 or 1048576
+    local ready = (BUSY and BUSY > 0) and 2 or 3
+    if BUSY then BUSY = BUSY - 1; ERASED = true end
+    local p = { ready, 64, 0, 0, 0, 0, 0, 64, 0 }
+    for i = 0, 3 do p[#p + 1] = math.floor(used / 256 ^ i) % 256 end
+    for _, f in ipairs(mspReplyFrames(70, p)) do queue[#queue + 1] = f end
   end
   return true
 end
@@ -151,4 +161,23 @@ check("API version", wgt.fcApi and math.floor(wgt.fcApi * 100 + 0.5), 1209)
 local req = pushed[2]
 check("MSP request frame", req and table.concat(req[2], ","), "200,234,49,0,32,32")
 for i = 1, 6 do check("capacity " .. i, wgt.battCaps and wgt.battCaps[i], CAPS[i]) end
+
+-- blackbox erase (Menu > Erase blackbox, second tap): 72, then 70 until ready
+wgt.erase = { phase = "send", since = NOW, tries = 0 }
+local sent, doneMsg = {}, nil
+for step = 201, 400 do -- 10 s more, the link kept up
+  NOW = step * 5
+  if step % 10 == 0 then queue[#queue + 1] = customFrame({ { 0x1011, { 0x13, 0x94 } } }) end
+  local n = #pushed
+  widget.refresh(wgt, 0, nil)
+  for i = n + 1, #pushed do sent[#sent + 1] = pushed[i][2][5] end
+  if not wgt.erase and not doneMsg then doneMsg = wgt.toolMsg and wgt.toolMsg.text or "none" end
+end
+local count = {}
+for _, c in ipairs(sent) do count[c] = (count[c] or 0) + 1 end
+check("erase request sent once", count[72], 1)
+check("summary polled until ready", (count[70] or 0) >= 3, true)
+check("blackbox empty", wgt.blackbox and wgt.blackbox.used, 0)
+check("erase finished", wgt.erase, nil)
+check("erase message", doneMsg, "Blackbox erased")
 print(fails == 0 and "ALL OK" or (fails .. " FAILED"))
