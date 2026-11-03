@@ -28,7 +28,8 @@
 - background (画面に出ていない間) は tick だけ
 
 ## MSP (接続後、1 つずつ・1.5 秒間隔・各 6 回まで)
-`FC.startup`: MSP_API_VERSION (1) → MSP_BATTERY_CONFIG (32、各プロファイルの容量) → MSP_GOVERNOR_PROFILE (148、目標ヘッドスピード。
+`FC.startup`: MSP_API_VERSION (1) → MSP_PILOT_CONFIG (12、機体名を FC に合わせるか) → MSP_NAME (10) →
+MSP_BATTERY_CONFIG (32、各プロファイルの容量) → MSP_GOVERNOR_PROFILE (148、目標ヘッドスピード。
 PID# が変わると再要求) → MSP_DATAFLASH_SUMMARY (70、ブラックボックス)。FC 閲覧画面を開いている間はそのページ (112/111/148) が優先。
 バッテリープロファイル変更は MSP_SET_BATTERY_PROFILE (176)、結果は BAT# センサーで確認
 
@@ -43,6 +44,7 @@ PID# が変わると再要求) → MSP_DATAFLASH_SUMMARY (70、ブラックボ�
 | armwarning | 接続中で ARMD ≠ 0 |
 | battselect | 接続直後のバッテリー選択 (`wgt.bp`、BAT# が来てから) |
 | fcview | FC 設定の閲覧 (`wgt.infoView`、Page スイッチか Menu) |
+| simple | それ以外で `CONFIG.simple.on` (Settings > Display > Simple screen)。`LV.buildSimple` (円弧 = lvgl arc、目盛 = line)。大きい機体画像は `wgt.modelLargePath` (`ensureModelImage` が `-L.png` の有無を見る) |
 | dashboard | それ以外 |
 
 - 組み立ての主な部品: `LV.rect` `LV.text` (中心 y 指定、実測行高) `LV.button` `LV.tab` (ラベル行 + 値) `LV.bar` `LV.topBar` `LV.touchBadge`

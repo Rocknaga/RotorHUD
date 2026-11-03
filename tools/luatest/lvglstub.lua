@@ -16,6 +16,8 @@ local TYPES = {
   label = { align = 1, text = 1, font = 1 },
   rectangle = { filled = 1, thickness = 1, rounded = 1 },
   circle = { radius = 1, filled = 1, thickness = 1 },
+  arc = { radius = 1, filled = 1, thickness = 1, rounded = 1, startAngle = 1, endAngle = 1, bgColor = 1,
+    bgOpacity = 1, bgStartAngle = 1, bgEndAngle = 1 },
   line = { pts = 1, thickness = 1, rounded = 1, dashGap = 1, dashWidth = 1 },
   image = { file = 1, fill = 1, object = true },
   box = { align = 1, scrollBar = 1, scrollDir = 1, scrollTo = 1, scrolled = 1, object = true },
@@ -24,7 +26,8 @@ local TYPES = {
   slider = { min = 1, max = 1, get = 1, set = 1, object = true, control = true },
   textEdit = { value = 1, length = 1, set = 1, object = true, control = true },
 }
-local FUNCS = { "text", "color", "visible", "size", "pos", "font", "pts", "get", "textColor", "active" }
+local FUNCS = { "text", "color", "visible", "size", "pos", "font", "pts", "get", "textColor", "active",
+  "startAngle", "endAngle" }
 
 local function issue(s)
   if not M.seen then M.seen = {} end
@@ -45,7 +48,7 @@ local function walk(list, ox, oy, clip)
       local x, y = (o.x or 0) + ox, (o.y or 0) + oy
       local w = (type(o.w) == "number") and o.w or 0
       local h = (type(o.h) == "number") and o.h or 0
-      if o.type == "circle" then x, y, w, h = x - (o.radius or 0), y - (o.radius or 0), 2 * (o.radius or 0), 2 * (o.radius or 0) end
+      if o.type == "circle" or o.type == "arc" then x, y, w, h = x - (o.radius or 0), y - (o.radius or 0), 2 * (o.radius or 0), 2 * (o.radius or 0) end
       if not clip and o.type ~= "line" and (x < 0 or y < 0 or x + w > 800 or y + h > 480) then
         issue(string.format("%s off-screen x=%d y=%d w=%d h=%d %s", o.type, x, y, w, h,
           type(o.text) == "string" and o.text or ""))

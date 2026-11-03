@@ -1,0 +1,18 @@
+RFTelem voice files - credits and terms
+
+Japanese (tools/voice/make_voices.ps1, VOICEVOX https://voicevox.hiroshiba.jp/)
+Each character has its own terms of use (check each before publishing; some
+ask for a specific credit form); generated audio must be credited:
+  no7       VOICEVOX:No.7
+  ryusei    VOICEVOX:青山龍星
+  takehiro  VOICEVOX:玄野武宏
+  himari    VOICEVOX:冥鳴ひまり
+  voidoll   VOICEVOX:Voidoll
+  zundamon  VOICEVOX:ずんだもん
+
+English (tools/voice/make_voices_en.py, Piper https://github.com/rhasspy/piper, MIT)
+Voice models from rhasspy/piper-voices (MIT), trained on public-domain
+recordings only:
+  en_male    en_US-john-medium    - LibriVox recordings (public domain),
+                                    finetuned from kristin (LibriVox, public domain)
+  en_female  en_US-ljspeech-high  - LJ Speech Dataset (public domain)

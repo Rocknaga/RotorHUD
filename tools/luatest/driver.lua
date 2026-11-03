@@ -139,7 +139,10 @@ getDateTime = function() return { year = 2026, mon = 10, day = 30, hour = 1, min
 model = { getInfo = function() return { name = "S2 Ultra", bitmap = "" } end }
 playFile = function(p) print("PLAY " .. p) end
 local haptics = 0
-playHaptic = function(d, p) haptics = haptics + 1 end
+playHaptic = function(d, p)
+  haptics = haptics + 1
+  if opts.haptics then print(string.format("HAPTIC %d,%d", d, p or 0)) end -- "haptics": each pulse with its time
+end
 
 -- patches go to whichever widget file holds the text (main.lua included)
 local MAIN_PATH = "/WIDGETS/RFTelem/main.lua"
@@ -162,6 +165,12 @@ if opts.native then patch("nativeBackup = false,", "nativeBackup = true,") end
 if opts.msp then patch("if CONFIG%.simulate then %-%- no FC", "if false then -- no FC") end
 -- ARMD with real reasons: THROTTLE (bit 7) + ANGLE (bit 8) + ARM_SWITCH (bit 26)
 if opts.armdthr then patch("t%.armd = 67108872", "t.armd = 67108864 + 128 + 256") end
+-- Settings > Display > Simple screen on (light palette, shapes)
+if opts.simple then patch("simple = { on = false", "simple = { on = true") end
+-- the battery-not-full window: full set above the simulated pack (4.18 V/cell)
+if opts.notfull then patch("fullCell = 4%.10", "fullCell = 4.30") end
+-- the frame-rate label on (CONFIG.perfOverlay)
+if opts.perf then patch("perfOverlay = false", "perfOverlay = true") end
 -- the FC's CMS menu open (16384, seen on the radio 2026-11-03): reason + 3 hint lines
 if opts.armdcms then patch("t%.armd = 67108872", "t.armd = 16384") end
 -- Governor FALLBACK (no headspeed signal) for 6s mid-flight
@@ -265,6 +274,10 @@ for step = 0, 145 * 20 do -- 50ms steps over one 140s cycle + a bit
     if opts.ui and NOW == 7490 and not (wgt.toolMsg and wgt.toolMsg.text == "Blackbox erased"
                                         and wgt.blackbox and wgt.blackbox.used == 0) then
       print("CHECK FAIL: blackbox erase: " .. tostring(wgt.toolMsg and wgt.toolMsg.text))
+    end
+    if (wgt.fullAlert ~= nil) ~= (FULL_SEEN or false) then -- the battery-not-full window opens / closes
+      FULL_SEEN = wgt.fullAlert ~= nil
+      print((FULL_SEEN and "FULLALERT open " or "FULLALERT closed ") .. (FULL_SEEN and table.concat(LVSTUB.texts(), " | ") or ""))
     end
     if ARMD_SHOW and NOW >= ARMD_SHOW then
       ARMD_SHOW = nil

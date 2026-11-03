@@ -54,6 +54,11 @@ local CONFIG = {
   },
 
   perfOverlay = false, -- fps / ms per frame / Lua KB, bottom-right (speed check; Settings > Display)
+  -- Simple screen (Settings > Display) in place of the dashboard: mostly
+  -- shapes (LVGL VIEW buildSimple). Full scales of its meters: current,
+  -- and flight time when Settings > Flight time call is off. Its large
+  -- model picture: /IMAGES/<model>-L.png, exactly imageW x imageH.
+  simple = { on = false, currentMax = 200, flightSec = 360, imageW = 320, imageH = 124 },
   -- Rotorflight settings: the official RF2 Lua (installed under /SCRIPTS/RF2/)
   -- runs inside the widget; rf2Skin draws its screens in the widget's style
   -- (rf2ui.lua), false = RF2's own lvgl screens.
@@ -149,10 +154,9 @@ local CONFIG = {
   --   of this file) - red/danger states are left alone on purpose.
   theme = "color",
 
-  -- Transmitter (TX16S) battery voltage range for the top bar's battery
-  -- icon, in volts. Defaults assume a 2S Li-ion pack (the TX16S MK3's
-  -- stock setup) - adjust to match your radio's actual Battery Range
-  -- setting under Radio Setup, if you've calibrated it differently.
+  -- Transmitter battery range for the top bar's battery icon, in volts:
+  -- read from Radio Setup > Battery range (getGeneralSettings battMin /
+  -- battMax, EdgeTX 2.12 api_general.cpp); these only if that fails.
   txBattery = {
     minV = 6.4, -- 0%
     maxV = 8.4, -- 100%
@@ -171,8 +175,10 @@ local CONFIG = {
   alarm = {
     enabled     = true,
     dir         = "/SOUNDS/rf/",
-    voiceSets   = { "no7", "ryusei", "takehiro", "himari", "voidoll", "zundamon" },
-    voiceLabels = { "No.7", "Ryusei", "Takehiro", "Himari", "Voidoll", "Zundamon" }, -- standby screen
+    -- Japanese (VOICEVOX, tools/voice/make_voices.ps1), then English (Piper,
+    -- tools/voice/make_voices_en.py): the same file names in each folder
+    voiceSets   = { "no7", "ryusei", "takehiro", "himari", "voidoll", "zundamon", "en_male", "en_female" },
+    voiceLabels = { "No.7", "Ryusei", "Takehiro", "Himari", "Voidoll", "Zundamon", "English M", "English F" }, -- standby screen
     repeatSec   = 10,    -- critical alarms repeat this often while active
     cellCaution = 3.60,  -- V/cell, sustained cellSustainSec (rotor spinning)
     cellCritical = 3.50,
@@ -199,6 +205,14 @@ local CONFIG = {
     becCritical = 6.0,   -- V
     becHyst     = 0.3,
     flightTimeSec = 0,   -- >0: one "flight time" call when the timer passes it
+    -- Battery not full: once per connect, after the connect quiet time + 1 s
+    -- (values settled), disarmed with the rotor stopped, Vcel below fullCell
+    -- opens a window over the screen (caution tone + haptic). It closes on
+    -- a tap anywhere on it, ENTER, the Close switch, arming, or after
+    -- fullAlertSec. Settings > Flight.
+    fullCheck = true,
+    fullCell = 4.10,     -- V per cell
+    fullAlertSec = 10,
     -- Haptic patterns: { duration, pause } per pulse, passed to playHaptic.
     -- UNVERIFIED on TX16S MK3: whether it has a vibration motor at all, and
     -- whether playHaptic's units are ms or 10ms - tune on the radio.
@@ -216,6 +230,9 @@ local CONFIG = {
     hapticCaution  = { { 30, 0 } },
     hapticSaved    = { { 40, 60 }, { 40, 0 } }, -- FC settings saved: two short pulses
     hapticCritical = { { 60, 30 }, { 60, 30 }, { 60, 0 } },
+    hapticArm      = { { 40, 0 } },              -- armed: one pulse
+    hapticDisarm   = { { 40, 60 }, { 40, 0 } },  -- disarmed: two
+    hapticProfile  = { { 40, 0 } },              -- rate / PID profile changed: one for both
     -- Option C: set true when the EdgeTX logical-switch backup
     -- (docs/alarms_native.md) covers low battery / low cell, so the
     -- widget doesn't call them out a second time.
@@ -368,7 +385,13 @@ end
 local function getTxBatteryPct()
   local ok, voltage = pcall(function() return getValue("tx-voltage") end)
   if not ok or not voltage or voltage <= 0 then return nil, nil end
-  local minV, maxV = CONFIG.txBattery.minV, CONFIG.txBattery.maxV
+  local cfg = CONFIG.txBattery
+  if cfg.radio == nil then
+    local okG, g = pcall(getGeneralSettings)
+    cfg.radio = (okG and g and g.battMin and g.battMax and g.battMax > g.battMin) and g or false
+  end
+  local minV, maxV = cfg.minV, cfg.maxV
+  if cfg.radio then minV, maxV = cfg.radio.battMin, cfg.radio.battMax end
   local pct = (voltage - minV) / (maxV - minV) * 100
   pct = math.max(0, math.min(100, pct))
   return pct, voltage
@@ -449,7 +472,7 @@ local function fmt(value, decimals)
   if decimals and decimals > 0 then
     return string.format("%." .. decimals .. "f", value)
   end
-  return string.format("%d", value)
+  return string.format("%d", math.floor(value + 0.5)) -- %d needs a whole number (Lua 5.3)
 end
 
 local function fmtTime(totalSeconds)
@@ -525,7 +548,12 @@ local function ensureModelImage(wgt)
     return
   end
   wgt.modelImageName = name
-  wgt.modelBitmap, wgt.modelImagePath = nil, nil
+  wgt.modelBitmap, wgt.modelImagePath, wgt.modelLargePath = nil, nil, nil
+  local large = "/IMAGES/" .. name .. "-L.png" -- the simple screen's (CONFIG.simple)
+  pcall(function()
+    local f = io.open(large, "r")
+    if f then io.close(f); wgt.modelLargePath = large end
+  end)
   for i = 1, #CONFIG.imagePaths do
     local path = string.gsub(CONFIG.imagePaths[i], "{name}", name)
     local bmp = tryLoadBitmap(path)
@@ -602,14 +630,22 @@ local SETTINGS = {
     default = CONFIG.perfOverlay, apply = function(v) CONFIG.perfOverlay = v end },
   { key = "modelImage", group = "Display", label = "Model picture", kind = "bool",
     default = CONFIG.showModelImage, apply = function(v) CONFIG.showModelImage = v end },
+  { key = "simple", group = "Display", label = "Simple screen", kind = "bool",
+    default = CONFIG.simple.on, apply = function(v) CONFIG.simple.on = v end },
   { key = "flightTime", group = "Flight", label = "Flight time call", kind = "number", min = 0, max = 900, step = 30,
     unit = " s", zero = "Off", default = CONFIG.alarm.flightTimeSec, apply = function(v) CONFIG.alarm.flightTimeSec = v end },
   { key = "logClose", group = "Flight", label = "Flight log closes", kind = "number", min = 0, max = 300, step = 30,
     unit = " s", zero = "Never", default = CONFIG.flightLogTimeoutSec, apply = function(v) CONFIG.flightLogTimeoutSec = v end },
+  { key = "fullCheck", group = "Flight", label = "Full charge check", kind = "bool",
+    default = CONFIG.alarm.fullCheck, apply = function(v) CONFIG.alarm.fullCheck = v end },
+  { key = "fullCell", group = "Flight", label = "Full at cell", kind = "number", min = 3.80, max = 4.40, step = 0.05,
+    decimals = 2, unit = "V", default = CONFIG.alarm.fullCell, apply = function(v) CONFIG.alarm.fullCell = v end },
   { key = "pickTimeout", group = "Flight", label = "Picker keeps after", kind = "number", min = 0, max = 60, step = 5,
     unit = " s", zero = "Never", default = CONFIG.batteryProfile.timeoutSec,
     apply = function(v) CONFIG.batteryProfile.timeoutSec = v end },
 }
+-- not shown (no group): the model's own name while it has the FC's (FC.nameUpdate)
+SETTINGS[#SETTINGS + 1] = { key = "prevName", group = "", label = "", kind = "text", length = 15, default = "" }
 -- battery profile names (picker tiles, history), free text typed on the radio
 for i = 1, 6 do
   SETTINGS[#SETTINGS + 1] = { key = "pack" .. i, group = "Packs", label = "Pack " .. i, kind = "text", length = 16,
@@ -618,6 +654,9 @@ for i = 1, 6 do
 end
 
 -- current value: the user's, else the widget option, else the default
+SET.byKey = {}
+for _, def in ipairs(SETTINGS) do SET.byKey[def.key] = def end
+
 function SET.value(wgt, def)
   local u = USER[def.key]
   if u ~= nil then return u end
@@ -1525,6 +1564,25 @@ local function runAlarms(wgt, t, running, connected)
   -- Bank = RTE# (rates profile, the V-bar "bank"), Profile = PID#.
   info("bank", t.bank and math.floor(t.bank), function(b) alert(wgt, "info", "bank" .. b) end)
   info("pid", t.pidProfile and math.floor(t.pidProfile), function(p) alert(wgt, "info", "profile" .. p) end)
+  -- Haptics on a change (not the first value after a connect - wgt.alarm
+  -- starts over then): arm one pulse, disarm two; rate / PID profile one
+  -- pulse for both, as one switch moves them together (right away, and
+  -- further changes within 1 s add nothing).
+  local hp = a.haptic or {}
+  a.haptic = hp
+  if t.armFlags ~= nil then
+    if hp.arm ~= nil and hp.arm ~= armedNow then playPattern(armedNow and cfg.hapticArm or cfg.hapticDisarm) end
+    hp.arm = armedNow
+  end
+  if t.bank ~= nil or t.pidProfile ~= nil then
+    local prof = tostring(t.bank and math.floor(t.bank)) .. "/" .. tostring(t.pidProfile and math.floor(t.pidProfile))
+    local now = getTime()
+    if hp.prof ~= nil and hp.prof ~= prof then
+      if now - (hp.profAt or -1000) > 100 then playPattern(cfg.hapticProfile) end
+      hp.profAt = now
+    end
+    hp.prof = prof
+  end
   -- Battery profile (BAT#): also how a picker change gets confirmed aloud.
   -- With the picker: the current profile isn't announced on connect (the
   -- picker asks instead), only a change made with it.
@@ -1568,6 +1626,22 @@ local function runAlarms(wgt, t, running, connected)
       alert(wgt, "info", string.format("batt%03d", battNow))
     end
   end
+end
+
+-- Battery not full (CONFIG.alarm.fullCheck): one look per connect, see
+-- CONFIG.alarm. wgt.fullAlert = { at, cell } while the window is open.
+local function fullChargeCheck(wgt, t, connected, running, armed)
+  local cfg, now = CONFIG.alarm, getTime()
+  if not connected then wgt.fullChecked, wgt.fullAlert = nil, nil; return end
+  local a = wgt.fullAlert
+  if a and (armed or now - a.at > cfg.fullAlertSec * 100) then wgt.fullAlert = nil end
+  if wgt.fullChecked or not cfg.fullCheck then return end
+  if now < (wgt.alarm.quietUntil or 0) + 100 or not t.perCellVoltage or t.perCellVoltage <= 0 then return end
+  wgt.fullChecked = true
+  if armed or running or t.perCellVoltage >= cfg.fullCell then return end
+  wgt.fullAlert = { at = now, cell = t.perCellVoltage }
+  playEffect(wgt, "caution")
+  playPattern(cfg.hapticCaution)
 end
 
 -- ============================== RF TELEMETRY ==============================
@@ -1897,7 +1971,7 @@ FC.pages = {
 }
 
 -- RF2's simulator replies, so CONFIG.simulate shows the pages too
-FC.startup = { MSP_API_VERSION, MSP_BATTERY_CONFIG, 148, 70 }
+FC.startup = { MSP_API_VERSION, 12, 10, MSP_BATTERY_CONFIG, 148, 70 }
 
 FC.sim = {
   [112] = { 70, 0, 225, 0, 90, 0, 120, 0, 100, 0, 200, 0, 70, 0, 120, 0, 100, 0, 125, 0, 83, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 25, 0 },
@@ -1927,7 +2001,8 @@ local function rfMspUpdate(wgt, connected)
   -- headspeed (MSP_GOVERNOR_PROFILE, again when PID# changes), blackbox
   -- space (MSP_DATAFLASH_SUMMARY)
   local have = { [MSP_API_VERSION] = wgt.fcApi, [MSP_BATTERY_CONFIG] = wgt.battCaps or not cfg.readCapacities,
-                 [148] = wgt.govTarget, [70] = wgt.blackbox }
+                 [148] = wgt.govTarget, [70] = wgt.blackbox, [12] = wgt.fcSetName ~= nil,
+                 [10] = wgt.fcName or wgt.fcSetName == false }
   for _, cmd in ipairs(FC.startup) do
     if not have[cmd] and (rt.tries[cmd] or 0) < 6 then
       if mspRequest(cmd, {}) then rt.capAskedAt, rt.tries[cmd] = now, (rt.tries[cmd] or 0) + 1 end
@@ -1969,6 +2044,37 @@ function FC.eraseUpdate(wgt, connected)
   end
 end
 
+-- Model name from the FC, as rf2bg did (RF2 background_init.lua): with
+-- the FC's "set model name" flag (Model page in RF2, MSP_PILOT_CONFIG),
+-- the model takes the craft name (MSP_NAME) while connected; the radio's
+-- own name is kept in settings.txt (prevName) and put back when the link
+-- drops, or at the next start if the radio was switched off connected.
+-- Runs after HIST.record in tick, so a flight is filed under the FC name.
+function FC.nameUpdate(wgt, connected)
+  if CONFIG.simulate or not (model and model.getInfo and model.setInfo) then return end
+  local def = SET.byKey.prevName
+  if connected then
+    local name = wgt.fcName
+    if wgt.nameDone or not wgt.fcSetName or not name or name == "" then return end
+    wgt.nameDone = true
+    name = string.sub(name, 1, 15) -- EdgeTX model names are 15 characters
+    local info = model.getInfo()
+    if info.name == name then return end
+    if (USER.prevName or "") == "" then SET.set(def, info.name) end
+    info.name = name
+    model.setInfo(info)
+  else
+    wgt.nameDone = nil
+    local prev = USER.prevName
+    if prev and prev ~= "" then
+      local info = model.getInfo()
+      info.name = prev
+      model.setInfo(info)
+      SET.set(def, "")
+    end
+  end
+end
+
 local function newRfTelemetryState(wgt)
   local rt = { count = 0, skip = 0, tries = {} }
   rt.onReply = function(cmd, buf, isError)
@@ -1983,6 +2089,17 @@ local function newRfTelemetryState(wgt)
       wgt.blackbox = { ready = buf[1] % 2 == 1, supported = math.floor(buf[1] / 2) % 2 == 1, total = u32(6),
         used = u32(10) }
       if wgt.erase and wgt.erase.phase == "wait" and wgt.blackbox.ready then wgt.erase.phase = "done" end
+    end
+    if cmd == 12 and not isError then -- MSP_PILOT_CONFIG: model_flags U32 at 11, bit 0 = MODEL_SET_NAME (API 12.09+)
+      wgt.fcSetName = #buf >= 14 and buf[11] % 2 == 1
+    end
+    if cmd == 10 and not isError then -- MSP_NAME: the craft name, up to a 0
+      local s = ""
+      for i = 1, #buf do
+        if buf[i] == 0 then break end
+        s = s .. string.char(buf[i])
+      end
+      wgt.fcName = s
     end
     if cmd == 72 and not isError and wgt.erase and wgt.erase.phase == "send" then
       wgt.erase.phase, wgt.erase.askedAt = "wait", getTime()
@@ -2148,6 +2265,7 @@ local function tick(wgt)
     bpStart(wgt)
     wgt.battCaps, wgt.fcApi, wgt.rt.tries, wgt.rt.capAskedAt = nil, nil, {}, nil
     wgt.govTarget, wgt.blackbox, wgt.flightPack, wgt.lastPid, wgt.erase = nil, nil, nil, nil, nil
+    wgt.fcSetName, wgt.fcName = nil, nil
   end
   wgt.wasConnected = connected
 
@@ -2159,6 +2277,7 @@ local function tick(wgt)
     wgt.lastPid = t.pidProfile
     if CONFIG.simulate then
       wgt.govTarget = wgt.govTarget or 2100
+      wgt.battCaps = wgt.battCaps or { 5000, 5000, 4500, 4500, 3800, 3800 }
       wgt.blackbox = wgt.blackbox or { supported = true, total = 4194304, used = 1048576 }
     end
   end
@@ -2175,10 +2294,12 @@ local function tick(wgt)
   updateMinCharge(wgt, t, running)
   updateFlightSamples(wgt, t, running)
   runAlarms(wgt, t, running, connected)
+  fullChargeCheck(wgt, t, connected, running, t.armFlags ~= nil and math.floor(t.armFlags) % 2 == 1)
   wgt.wasRunning = running and connected
   bpUpdate(wgt, t, connected)
   rfMspUpdate(wgt, connected)
   FC.eraseUpdate(wgt, connected)
+  FC.nameUpdate(wgt, connected)
 
   -- Track when this disconnect started, so the flight log can
   -- auto-dismiss after a timeout - this is what makes the dismiss
@@ -2202,7 +2323,9 @@ local function tick(wgt)
   -- mode where touch/key events reach a widget.
   local closeOn = sourceActive(wgt.options and wgt.options.Close)
   if closeOn and not wgt.closeWasOn then
-    if not connected then
+    if wgt.fullAlert then -- the battery-not-full window first
+      wgt.fullAlert = nil
+    elseif not connected then
       wgt.showFlightLog = false
     else
       bpStep(wgt, 1)
@@ -2401,6 +2524,7 @@ end
 -- ============================== EXPORTS ===================================
 
 R.COLOR = COLOR
+R.battLandPct = battLandPct
 R.HIST = HIST
 R.create, R.update, R.refresh, R.background = create, update, refresh, background
 R.ARMD_ARM_SWITCH_AT_POWERUP = ARMD_ARM_SWITCH_AT_POWERUP

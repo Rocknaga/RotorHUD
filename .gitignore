@@ -5,3 +5,9 @@ Thumbs.db
 *.log
 sim/
 node_modules/
+__pycache__/
+# model pictures made from manufacturer / catalogue images (not ours to
+# publish): kept on the SD card and locally only
+sdcard/IMAGES/GOOSKY *
+sdcard/IMAGES/K110S*
+sdcard/IMAGES/S2 Ultra*

@@ -697,6 +697,160 @@ function LV.buildHistory(k, wgt, w, h)
   if #s.recent == 0 then LV.text(k, rx, cy + 30 + rowH / 2, rw - 24, "No flights recorded yet", 0, COLOR.dim) end
 end
 
+-- Simple screen (Settings > Display > Simple screen, in place of the
+-- dashboard): mostly shapes, the normal (dark) palette. Left card: the
+-- throttle as a 270-degree arc open at the bottom, in the governor's
+-- color, with a scale around it (major ticks at 0 / 50 / 100%); inside it
+-- the battery charge as a second arc (quarter ticks, red mark = Land at
+-- battery); in the middle a ring for the arm state (green = armed, grey =
+-- disarmed) around the charge, used / profile capacity and the battery
+-- profile; the headspeed in the opening. Right: the model
+-- picture large (/IMAGES/<model>-L.png, CONFIG.simple.imageW x imageH,
+-- else the normal small picture) and a card with flight time, current
+-- and ESC temperature as segmented bars.
+-- lvgl arc angles: 0 = 3 o'clock, clockwise; arc x/y = center.
+LV.SIMPLE = { start = 135, sweep = 270 }
+
+-- a point at fraction f of the simple arcs' sweep, radius r around gx, gy
+function LV.arcPoint(gx, gy, r, f)
+  local a = math.rad(LV.SIMPLE.start + LV.SIMPLE.sweep * f)
+  return { math.floor(gx + r * math.cos(a) + 0.5), math.floor(gy + r * math.sin(a) + 0.5) }
+end
+
+-- a radial tick at fraction f from radius r1 to r2
+function LV.arcTick(k, gx, gy, r1, r2, f, color, thickness)
+  k[#k + 1] = { type = "line", color = color, thickness = thickness, rounded = true,
+    pts = { LV.arcPoint(gx, gy, r1, f), LV.arcPoint(gx, gy, r2, f) } }
+end
+
+-- a 270-degree track + its fill (to LV.v[angleKey], in LV.v[colorKey])
+function LV.arcGauge(k, gx, gy, r, th, angleKey, colorKey, color)
+  local S = LV.SIMPLE
+  k[#k + 1] = { type = "arc", x = gx, y = gy, radius = r, thickness = th, rounded = true,
+    startAngle = S.start, endAngle = (S.start + S.sweep) % 360, color = COLOR.barBg, bgOpacity = 0 }
+  k[#k + 1] = { type = "arc", x = gx, y = gy, radius = r, thickness = th, rounded = true,
+    startAngle = S.start, endAngle = function() return LV.v[angleKey] or S.start end,
+    color = LV.dv(colorKey, color), bgOpacity = 0,
+    visible = function() return (LV.v[angleKey] or S.start) ~= S.start end }
+end
+
+-- a bar of w x h filled to LV.v[fracKey] (0..1) in LV.v[colorKey], cut
+-- into `segs` segments by gaps in the card color
+function LV.meter(k, x, y, w, h, fracKey, colorKey, color, segs)
+  LV.rect(k, x, y, w, h, COLOR.barBg, 3)
+  LV.rect(k, x, y, w, h, color, 3, {
+    color = LV.dv(colorKey, color),
+    size = function() return math.max(1, math.floor(w * math.min(1, LV.v[fracKey] or 0))), h end,
+    visible = function() return (LV.v[fracKey] or 0) > 0 end })
+  for i = 1, segs - 1 do LV.rect(k, x + math.floor(w * i / segs) - 1, y, 3, h, COLOR.panel) end
+end
+
+-- a card: border + fill, as the dashboard's cluster
+function LV.card(k, x, y, w, h)
+  LV.rect(k, x, y, w, h, COLOR.accentBorder, 8)
+  LV.rect(k, x + 1, y + 1, w - 2, h - 2, COLOR.panel, 7)
+end
+
+function LV.buildSimple(k, wgt, w, h)
+  LV.topBar(k, wgt, w, true)
+  local pad, top = 12, LV.Y1
+
+  -- left card: throttle + battery gauges
+  local cw, ch = 412, h - pad - top
+  LV.card(k, pad, top, cw, ch)
+  local gx, gy = pad + math.floor(cw / 2), top + 196
+  LV.text(k, pad + 14, top + 18, 180, LV.dv("sThr", "Throttle"), SMLSIZE, COLOR.dim)
+  LV.text(k, pad + cw - 174, top + 18, 160, LV.dv("govTarget", ""), SMLSIZE, COLOR.dim, RIGHT)
+  local ro, tho = 168, 24 -- throttle arc (outer)
+  for i = 0, 20 do -- scale: every 5%, longer every 25%, longest at 0 / 50 / 100%
+    local major = i % 10 == 0
+    local mid = i % 5 == 0
+    LV.arcTick(k, gx, gy, ro + 4, ro + (major and 18 or mid and 13 or 9), i / 20,
+      major and COLOR.white or COLOR.muted, major and 3 or 2)
+  end
+  LV.arcGauge(k, gx, gy, ro, tho, "sAngle", "govColor", COLOR.grey)
+  local rb, thb = ro - tho - 16, 16 -- battery arc (inner)
+  LV.arcGauge(k, gx, gy, rb, thb, "sBattAngle", "battColor", COLOR.battGood)
+  for q = 1, 3 do LV.arcTick(k, gx, gy, rb - thb - 10, rb - thb - 3, q / 4, COLOR.muted, 2) end
+  LV.arcTick(k, gx, gy, rb - thb - 12, rb + 4, R.battLandPct(wgt) / 100, COLOR.red, 4)
+  -- arm ring with the charge inside
+  local ra = rb - thb - 26
+  k[#k + 1] = { type = "circle", x = gx, y = gy, radius = ra, filled = false, thickness = 6,
+    color = LV.dv("sArmColor", COLOR.grey) }
+  LV.text(k, gx - ra, gy - 22, ra * 2, LV.dv("sCharge", "--"), MIDSIZE, COLOR.white, CENTER)
+  LV.text(k, gx - ra, gy + 12, ra * 2, LV.dv("sMah", ""), SMLSIZE, COLOR.dim, CENTER)
+  LV.text(k, gx - ra + 6, gy + 34, ra * 2 - 12, LV.dv("sPack", ""), SMLSIZE, COLOR.white, CENTER)
+  -- rpm in the opening of the arcs
+  LV.text(k, gx - 120, gy + 150, 240, LV.dv("rpm", "--"), DBLSIZE, COLOR.white, CENTER)
+  LV.text(k, gx + 80, gy + 168, 60, "rpm", SMLSIZE, COLOR.dim)
+
+  -- right: model picture card
+  local rx = pad + cw + pad
+  local rw = w - pad - rx
+  local ih = 170
+  LV.card(k, rx, top, rw, ih)
+  local cfg = CONFIG.simple
+  if CONFIG.showModelImage and (wgt.modelLargePath or wgt.modelImagePath) then
+    local iw, iht = cfg.imageW, cfg.imageH
+    if not wgt.modelLargePath then iw, iht = CONFIG.modelImageW, CONFIG.modelImageH end
+    k[#k + 1] = { type = "image", file = wgt.modelLargePath or wgt.modelImagePath,
+      x = rx + math.floor((rw - iw) / 2), y = top + 6 + math.floor((ih - 36 - iht) / 2), w = iw, h = iht }
+  end
+  LV.rect(k, rx + 14, top + ih - 34, rw - 28, 1, COLOR.accentBorder)
+  LV.text(k, rx + 14, top + ih - 17, rw - 28, LV.dv("model", ""), SMLSIZE, COLOR.dim, CENTER)
+
+  -- right: flight time / current / ESC temperature
+  local by = top + ih + pad
+  local bh = h - pad - by
+  LV.card(k, rx, by, rw, bh)
+  local rowH = math.floor(bh / 3)
+  local rows = { { "Flight", "flight", "sFlightFrac", "sFlightColor", COLOR.accent, 10 },
+                 { "Current", "curr", "sCurFrac", "sCurColor", COLOR.accent, 10 },
+                 { "ESC temp", "sEsc", "sEscFrac", "sEscColor", COLOR.green, 10 } }
+  for i, row in ipairs(rows) do
+    local ry = by + (i - 1) * rowH
+    if i > 1 then LV.rect(k, rx + 14, ry, rw - 28, 1, COLOR.accentBorder) end
+    LV.text(k, rx + 14, ry + 20, 160, row[1], SMLSIZE, COLOR.dim)
+    LV.text(k, rx + rw - 174, ry + 20, 160, LV.dv(row[2], "--"), 0, COLOR.white, RIGHT)
+    LV.meter(k, rx + 14, ry + 38, rw - 28, 20, row[3], row[4], row[5], row[6])
+  end
+  -- ESC caution mark on its bar
+  local mw = rw - 28
+  local ex = rx + 14 + math.floor(mw * math.min(1, CONFIG.alarm.escCaution / CONFIG.alarm.escCritical))
+  LV.rect(k, math.min(ex, rx + 14 + mw - 3), by + 2 * rowH + 32, 3, 32, COLOR.orange)
+end
+
+-- Battery not full (core fullChargeCheck): a window over any screen. The
+-- whole card is one button (full screen), so a tap anywhere closes it;
+-- ENTER and the Close switch too, and the bar at the bottom runs down to
+-- the automatic close (CONFIG.alarm.fullAlertSec).
+function LV.buildFullAlert(k, wgt, w, h)
+  local vis = function() return LV.v.fullAlert ~= nil end
+  local cw, ch = 600, 250
+  local cx, cy = math.floor((w - cw) / 2), LV.Y1 + 40
+  LV.rect(k, cx, cy, cw, ch, COLOR.orange, 10, { visible = vis })
+  LV.rect(k, cx + 4, cy + 4, cw - 8, ch - 8, COLOR.panel, 7, { visible = vis }) -- the button below is full screen only
+  LV.button(k, cx + 4, cy + 4, cw - 8, ch - 8, "", function() wgt.fullAlert = nil end, 0,
+    { visible = vis, color = COLOR.panel })
+  -- battery shape, filled by the cell voltage (3.5 V .. Full at cell)
+  local bx, by, bw, bh = cx + 30, cy + 50, 150, 80
+  LV.rect(k, bx, by, bw, bh, COLOR.white, 10, { filled = false, thickness = 5, visible = vis })
+  LV.rect(k, bx + bw, by + bh / 2 - 16, 10, 32, COLOR.white, 3, { visible = vis })
+  LV.rect(k, bx + 10, by + 10, bw - 20, bh - 20, COLOR.orange, 4, { visible = vis,
+    size = function() return math.max(1, math.floor((bw - 20) * math.min(100, LV.v.fullAlertPct or 0) / 100)), bh - 20 end })
+  local tx = bx + bw + 40
+  LV.text(k, tx, cy + 62, cw - (tx - cx) - 20, "BATTERY NOT FULL", MIDSIZE, COLOR.orange, LEFT, { visible = vis })
+  LV.text(k, tx, cy + 110, cw - (tx - cx) - 20, LV.dv("fullAlert", ""), 0, COLOR.white, LEFT, { visible = vis })
+  LV.text(k, tx, cy + 140, cw - (tx - cx) - 20, LV.dv("fullAlertFull", ""), SMLSIZE, COLOR.dim, LEFT, { visible = vis })
+  LV.rect(k, cx + 30, cy + 168, cw - 60, 1, COLOR.accentBorder, nil, { visible = vis })
+  LV.text(k, cx + 30, cy + 192, cw - 60, LV.dv("fullAlertHint", ""), 0, COLOR.white, CENTER, { visible = vis })
+  -- time left to the automatic close
+  local tw = cw - 60
+  LV.rect(k, cx + 30, cy + ch - 26, tw, 8, COLOR.barBg, 4, { visible = vis })
+  LV.rect(k, cx + 30, cy + ch - 26, tw, 8, COLOR.orange, 4, { visible = vis,
+    size = function() return math.max(1, math.floor(tw * (LV.v.fullAlertLeft or 0))), 8 end })
+end
+
 -- small zones (not the 800x480 layout): headspeed + pack voltage
 function LV.buildSmall(k, wgt, w, h)
   LV.rect(k, 0, 0, w, h, COLOR.bg)
@@ -766,16 +920,19 @@ function LV.build(wgt, screen, t, parsed)
     LV.buildSettings(k, wgt, w, h)
   elseif screen == "history" then
     LV.buildHistory(k, wgt, w, h)
+  elseif screen == "simple" then
+    LV.buildSimple(k, wgt, w, h)
   else
     LV.buildDashboard(k, wgt, w, h)
   end
-  if screen == "standby" or screen == "dashboard" then LV.buildMenu(k, wgt, w, h) end
+  if screen == "standby" or screen == "dashboard" or screen == "simple" then LV.buildMenu(k, wgt, w, h) end
   if screen ~= "small" then
+    LV.buildFullAlert(k, wgt, w, h)
     LV.buildToolMsg(k, wgt, w, h)
     LV.touchBadge(k)
   end
   if CONFIG.perfOverlay and screen ~= "small" then
-    LV.text(k, w - 304, h - 10, 300, LV.dv("perf", ""), SMLSIZE, COLOR.dim, RIGHT)
+    LV.text(k, w - 564, h - 12, 560, LV.dv("perf", ""), SMLSIZE, COLOR.dim, RIGHT)
   end
   lvgl.clear()
   lvgl.build(k)
@@ -792,6 +949,17 @@ function LV.update(wgt, t, screen, connected, armed)
   if wgt.toolMsg and getTime() - wgt.toolMsg.at <= 300 then
     v.toolMsg, v.toolMsgColor = wgt.toolMsg.text, wgt.toolMsg.color or COLOR.red
   else wgt.toolMsg, v.toolMsg = nil, nil end
+  local fa = wgt.fullAlert
+  if fa then
+    local cfg = CONFIG.alarm
+    v.fullAlert = string.format("%.2f V per cell", fa.cell)
+    v.fullAlertFull = string.format("full is %.2f V or more", cfg.fullCell)
+    v.fullAlertPct = math.max(5, math.min(95, (fa.cell - 3.5) * 100 / (cfg.fullCell - 3.5))) -- 3.5 V .. full, never full
+    v.fullAlertLeft = math.max(0, 1 - (getTime() - fa.at) / (cfg.fullAlertSec * 100))
+    v.fullAlertHint = v.full and "Tap to close" or "Close switch to close"
+  else
+    v.fullAlert = nil
+  end
   local ok, dt = pcall(getDateTime)
   if not ok then dt = nil end
   local txPct, txV = getTxBatteryPct()
@@ -832,7 +1000,31 @@ function LV.update(wgt, t, screen, connected, armed)
     v.warn = (#warnings > 0) and warnings[math.floor(getTime() / 200) % #warnings + 1] or ""
   end
 
-  if screen == "dashboard" then
+  if screen == "simple" then
+    local S, cfg = CONFIG.simple, CONFIG.alarm
+    local thr = math.min(100, math.max(0, t.throttle or 0))
+    v.sAngle = math.floor(LV.SIMPLE.start + LV.SIMPLE.sweep * thr / 100) % 360
+    v.sThr = t.throttle and ("Throttle " .. fmt(thr, 0) .. "%") or "Throttle"
+    v.sBattAngle = math.floor(LV.SIMPLE.start + LV.SIMPLE.sweep * math.min(1, math.max(0, (t.charge or 0) / 100))) % 360
+    v.sArmColor = armed and COLOR.green or COLOR.grey
+    v.sCharge = t.charge and (fmt(t.charge, 0) .. "%") or "--"
+    -- used / the selected profile's capacity (MSP_BATTERY_CONFIG), and its name
+    local p = t.battProfile
+    local cap = p and wgt.battCaps and wgt.battCaps[p]
+    v.sMah = (t.capacity and fmt(t.capacity, 0) or "--") .. ((cap and cap > 0) and ("/" .. cap) or "") .. " mAh"
+    local name = p and CONFIG.batteryProfile.labels[p]
+    v.sPack = p and ((name and name ~= "Profile " .. p) and name or ("Battery #" .. p)) or ""
+    local fsec = (cfg.flightTimeSec > 0) and cfg.flightTimeSec or S.flightSec
+    v.sFlightFrac = (wgt.flightSeconds or 0) / fsec
+    v.sFlightColor = (v.sFlightFrac >= 1) and COLOR.orange or COLOR.accent
+    v.sCurFrac = (t.current or 0) / S.currentMax
+    v.sCurColor = COLOR.accent
+    v.sEscFrac = (t.temp or 0) / cfg.escCritical
+    v.sEscColor = (t.temp and t.temp >= cfg.escCritical) and COLOR.red
+      or (t.temp and t.temp >= cfg.escCaution) and COLOR.orange or COLOR.green
+    v.sEsc = t.temp and (fmt(t.temp, 0) .. "\194\176C") or "--"
+  end
+  if screen == "dashboard" or screen == "simple" then
     v.volt, v.voltMin = fmtUnit(t.voltage, 1, "v"), wgt.minVoltage and ("min " .. fmt(wgt.minVoltage, 1) .. "v") or ""
     v.vcel = fmtUnit(t.perCellVoltage, 2, "v")
     v.curr, v.currMax = fmtUnit(t.current, 1, "A"), wgt.maxCurrent and ("max " .. fmt(wgt.maxCurrent, 1) .. "A") or ""
@@ -941,7 +1133,7 @@ function LV.screenType(wgt, t)
   if wgt.armWarningActive then return "armwarning" end
   if wgt.bp and wgt.bp.phase ~= "wait" then return "battselect" end
   if wgt.infoView and FC.pages[wgt.infoView] then return "fcview" end
-  return "dashboard"
+  return CONFIG.simple.on and "simple" or "dashboard"
 end
 
 -- refresh() for CONFIG.lvgl. Hosted RF2 runs its own lvgl UI (the official
@@ -986,11 +1178,14 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
   if wgt.history and (armed or not full) then wgt.history = nil end
   local screen = (h < 160) and "small" or LV.screenType(wgt, t)
   wgt.lastScreenType = screen
-  if (armed or (screen ~= "standby" and screen ~= "dashboard")) then wgt.menu = nil end
+  if (armed or (screen ~= "standby" and screen ~= "dashboard" and screen ~= "simple")) then wgt.menu = nil end
 
   -- keys (full screen only): ENTER = menu / pick / close log, RTN closes
   if event and event ~= 0 then
-    if wgt.menu then
+    if wgt.fullAlert and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK
+                          or event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK) then
+      wgt.fullAlert = nil
+    elseif wgt.menu then
       if event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then wgt.menu = nil end
     elseif screen == "battselect" and wgt.bp and wgt.bp.phase == "pick" then
       if event == EVT_VIRTUAL_NEXT then bpStep(wgt, 1)
@@ -999,7 +1194,7 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
       elseif event == EVT_VIRTUAL_EXIT or event == EVT_EXIT_BREAK then wgt.bp = nil end
     elseif screen == "flightlog" and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
       wgt.showFlightLog = false
-    elseif (screen == "dashboard" or screen == "standby") and not armed
+    elseif (screen == "dashboard" or screen == "simple" or screen == "standby") and not armed
            and (event == EVT_VIRTUAL_ENTER or event == EVT_ENTER_BREAK) then
       wgt.menu = { sel = 1 }
     end
@@ -1020,6 +1215,8 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
     sub = wgt.infoView .. ":" .. tostring(buf) .. ":" .. tostring(wgt.fcProf)
   elseif screen == "settings" then
     sub = "set:" .. wgt.settings.group
+  elseif screen == "simple" then
+    sub = "simple:" .. tostring(wgt.govTarget) -- the target tick
   elseif screen == "history" then
     sub = "hist:" .. (wgt.histGen or 0)
   end
@@ -1033,6 +1230,12 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
   if wgt.lvScreen ~= screen or wgt.lvTheme ~= R.COLOR or wgt.lvW ~= w or wgt.lvH ~= h or wgt.lvFull ~= full
      or wgt.lvSub ~= sub
      or wgt.lvModel ~= wgt.modelImagePath or (screen == "armwarning" and wgt.lvArmd ~= t.armd) then
+    -- rebuilds and the last one's cause, for the frame-rate label:
+    -- s screen, t theme, z zone, f full screen, u sub-page, m model picture, a ARMD
+    wgt.lvBuilds = (wgt.lvBuilds or 0) + 1
+    wgt.lvWhy = ((wgt.lvScreen ~= screen and "s") or (wgt.lvTheme ~= R.COLOR and "t")
+      or ((wgt.lvW ~= w or wgt.lvH ~= h) and "z") or (wgt.lvFull ~= full and "f") or (wgt.lvSub ~= sub and "u")
+      or (wgt.lvModel ~= wgt.modelImagePath and "m") or "a") .. ":" .. screen
     LV.update(wgt, t, screen, connected, armed)
     LV.build(wgt, screen, t, parsed)
     wgt.lvSub = sub
@@ -1052,8 +1255,8 @@ function LV.refresh(wgt, t, connected, armed, event, touchState, t0, t1)
       local fps10 = math.floor(p.n * 1000 / math.max(p.frame, 1))
       local okKb, kb = pcall(collectgarbage, "count")
       if not okKb or type(kb) ~= "number" then kb = 0 end
-      LV.v.perf = string.format("%d.%d fps  tick %d  lua %d ms  %dk", math.floor(fps10 / 10), fps10 % 10,
-        math.floor(p.tick * 10 / p.n), math.floor(p.ui * 10 / p.n), math.floor(kb))
+      LV.v.perf = string.format("%d.%d fps  tick %d  lua %d ms  %dk  b%d %s", math.floor(fps10 / 10), fps10 % 10,
+        math.floor(p.tick * 10 / p.n), math.floor(p.ui * 10 / p.n), math.floor(kb), wgt.lvBuilds or 0, wgt.lvWhy or "")
       p.n, p.tick, p.ui, p.frame = 0, 0, 0, 0
     end
   end

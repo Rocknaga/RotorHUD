@@ -24,7 +24,8 @@ end
 -- menu overrides Theme, Voice and BattLand when set there):
 --   Theme     0=color, 1=mono, 2=cyan
 --   Mute      source: voice alarms silent while > 0 (critical haptic never)
---   Voice     0=No.7, 1=Ryusei, 2=Takehiro, 3=Himari, 4=Voidoll, 5=Zundamon
+--   Voice     0=No.7, 1=Ryusei, 2=Takehiro, 3=Himari, 4=Voidoll, 5=Zundamon,
+--             6=English male, 7=English female
 --   Close     source: a press closes the flight log / steps the picker
 --   BattLand  remaining % for "land now" (10-50)
 --   BattSel   multi-position source picking the battery profile (6 bands)
@@ -34,7 +35,7 @@ end
 local options = {
   { "Theme", VALUE, 0, 0, 2 },
   { "Mute", SOURCE, 0 },
-  { "Voice", VALUE, 0, 0, 5 },
+  { "Voice", VALUE, 0, 0, 7 },
   { "Close", SOURCE, 0 },
   { "BattLand", VALUE, 20, 10, 50 },
   { "BattSel", SOURCE, 0 },

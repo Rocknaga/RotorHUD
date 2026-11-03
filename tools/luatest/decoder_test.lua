@@ -42,7 +42,9 @@ loadScript = function(path)
 end
 getTime = function() return NOW end
 getDateTime = function() return { year = 2026, mon = 11, day = 1, hour = 1, min = 2 } end
-model = { getInfo = function() return { name = "S2 Ultra", bitmap = "" } end }
+MODEL_NAME = "RF TEST"
+model = { getInfo = function() return { name = MODEL_NAME, bitmap = "" } end,
+  setInfo = function(info) MODEL_NAME = info.name end }
 playFile, playHaptic = noop, noop
 
 -- Sensors created through setTelemetryValue, readable back by name
@@ -52,7 +54,7 @@ setTelemetryValue = function(id, sub, inst, value, unit, prec, name)
 end
 getFieldInfo = function(name) return sensors[name] and { id = name } or nil end
 getValue = function(src)
-  if src == "RSSI" then return 100 end
+  if src == "RSSI" then return LINK_DOWN and 0 or 100 end
   if src == "tx-voltage" then return 7.9 end
   local s = sensors[src]
   return s and s.raw / 10 ^ s.prec or 0
@@ -92,6 +94,10 @@ crossfireTelemetryPush = function(cmd, data)
     for _, f in ipairs(mspReplyFrames(32, batteryConfigReply())) do queue[#queue + 1] = f end
   elseif cmd == 0x7C and data[5] == 1 then -- MSP_API_VERSION: protocol 0, API 12.09
     for _, f in ipairs(mspReplyFrames(1, { 0, 12, 9 })) do queue[#queue + 1] = f end
+  elseif cmd == 0x7C and data[5] == 12 then -- MSP_PILOT_CONFIG: model_flags bit 0 (set model name) on
+    for _, f in ipairs(mspReplyFrames(12, { 21, 1, 240, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0 })) do queue[#queue + 1] = f end
+  elseif cmd == 0x7C and data[5] == 10 then -- MSP_NAME
+    for _, f in ipairs(mspReplyFrames(10, { 71, 111, 98, 108, 105, 110, 32, 55, 48, 48 })) do queue[#queue + 1] = f end -- "Goblin 700"
   elseif cmd == 0x7C and data[5] == 72 then -- MSP_DATAFLASH_ERASE: empty ack, flash busy for 2 summaries
     queue[#queue + 1] = mspReplyFrames(72, {})[1]
     BUSY = 2
@@ -158,8 +164,12 @@ check("Vbec", getValue("Vbec"), 8.21)
 check("*Cnt frames", getValue("*Cnt"), 3)
 check("MSP API version request", pushed[1] and table.concat(pushed[1][2], ","), "200,234,48,0,1,1")
 check("API version", wgt.fcApi and math.floor(wgt.fcApi * 100 + 0.5), 1209)
-local req = pushed[2]
-check("MSP request frame", req and table.concat(req[2], ","), "200,234,49,0,32,32")
+local order = {}
+for i = 1, 4 do order[i] = pushed[i] and pushed[i][2][5] end
+check("MSP startup order", table.concat(order, ","), "1,12,10,32")
+local req = pushed[4]
+check("MSP request frame", req and table.concat(req[2], ","), "200,234,51,0,32,32")
+check("model name from the FC", MODEL_NAME, "Goblin 700")
 for i = 1, 6 do check("capacity " .. i, wgt.battCaps and wgt.battCaps[i], CAPS[i]) end
 
 -- blackbox erase (Menu > Erase blackbox, second tap): 72, then 70 until ready
@@ -180,4 +190,12 @@ check("summary polled until ready", (count[70] or 0) >= 3, true)
 check("blackbox empty", wgt.blackbox and wgt.blackbox.used, 0)
 check("erase finished", wgt.erase, nil)
 check("erase message", doneMsg, "Blackbox erased")
+
+-- link lost: the model gets its own name back
+LINK_DOWN = true
+for step = 401, 800 do
+  NOW = step * 5
+  widget.refresh(wgt, 0, nil)
+end
+check("model name restored", MODEL_NAME, "RF TEST")
 print(fails == 0 and "ALL OK" or (fails .. " FAILED"))
