@@ -186,6 +186,9 @@ end
 if opts.notfull then patch("fullCell = 4%.10", "fullCell = 4.30") end
 -- the frame-rate label on (CONFIG.perfOverlay)
 if opts.perf then patch("perfOverlay = false", "perfOverlay = true") end
+-- "calib": the FC calibrating after power-up (ARMD 4096, Nexus XR) instead of
+-- the arm-switch warning: calm screen, no caution, full-charge check after it
+if opts.calib then patch("t%.armd = 67108872", "t.armd = 4096") end
 -- the FC's CMS menu open (16384, seen on the radio 2026-11-03): reason + 3 hint lines
 if opts.armdcms then patch("t%.armd = 67108872", "t.armd = 16384") end
 -- Governor FALLBACK (no headspeed signal) for 6s mid-flight

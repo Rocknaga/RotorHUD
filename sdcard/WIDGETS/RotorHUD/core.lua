@@ -461,6 +461,16 @@ local function decodeArmd(code)
   return list
 end
 
+-- The FC's own start-up states, cleared by itself: only BOOT GRACE (bit 9)
+-- and/or CALIBRATING (bit 12) set. Some FCs (Nexus XR) calibrate for a long
+-- time after power-up: shown as a calm "starting up" screen, said once as
+-- info (no caution tone / haptic), and the full-charge check waits for it.
+local function armdSettling(code)
+  if not code or code <= 0 then return false end
+  code = math.floor(code)
+  return code - (math.floor(code / 512) % 2) * 512 - (math.floor(code / 4096) % 2) * 4096 == 0
+end
+
 -- x has no fractional part. Not "x == math.floor(x)": on EdgeTX 2.12
 -- (Lua 5.3) 12.5 == math.floor(12.5) is true (measured in the simulator).
 local function isWhole(x)
@@ -1553,6 +1563,9 @@ local function runAlarms(wgt, t, running, connected)
   onChange(a, "armd", t.armd and math.floor(t.armd), function(code)
     if code == ARMD_ARM_SWITCH_AT_POWERUP then
       alert(wgt, "caution", "arm_switch_on")
+    elseif armdSettling(code) then -- starting up: the reason only, as info
+      local reasons = decodeArmd(code)
+      for i = 1, math.min(2, #reasons) do alert(wgt, "info", reasons[i][3]) end
     elseif code ~= 0 then
       alert(wgt, "caution", "arm_disabled")
       local reasons = decodeArmd(code)
@@ -1633,10 +1646,15 @@ end
 -- CONFIG.alarm. wgt.fullAlert = { at, cell } while the window is open.
 local function fullChargeCheck(wgt, t, connected, running, armed)
   local cfg, now = CONFIG.alarm, getTime()
-  if not connected then wgt.fullChecked, wgt.fullAlert = nil, nil; return end
+  if not connected then wgt.fullChecked, wgt.fullAlert, wgt.fullSettled = nil, nil, nil; return end
   local a = wgt.fullAlert
   if a and (armed or now - a.at > cfg.fullAlertSec * 100) then wgt.fullAlert = nil end
   if wgt.fullChecked or not cfg.fullCheck then return end
+  -- not while the FC is still starting up (calibrating): its voltages and
+  -- cell count may not be right yet; 2 s more once it is done
+  if armdSettling(t.armd) then wgt.fullSettled = nil; return end
+  wgt.fullSettled = wgt.fullSettled or now
+  if now - wgt.fullSettled < 200 then return end
   if now < (wgt.alarm.quietUntil or 0) + 100 or not t.perCellVoltage or t.perCellVoltage <= 0 then return end
   wgt.fullChecked = true
   if armed or running or t.perCellVoltage >= cfg.fullCell then return end
@@ -2555,6 +2573,7 @@ R.caution = caution
 R.chartAxis = chartAxis
 R.critical = critical
 R.decodeArmd = decodeArmd
+R.armdSettling = armdSettling
 R.fitFontMeasured = fitFontMeasured
 R.flightSampleStats = flightSampleStats
 R.fmt = fmt

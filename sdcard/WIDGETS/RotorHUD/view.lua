@@ -297,8 +297,20 @@ function LV.buildArmWarning(k, wgt, w, h, armd)
   LV.topBar(k, wgt, w, false)
   local y = LV.Y1
   local areaH = h - y
-  LV.rect(k, 2, y + 2, w - 4, areaH - 4, COLOR.red, 0, { filled = false, thickness = 6 })
   local cy = y + areaH * 0.38
+  if R.armdSettling(armd) then
+    -- the FC is still starting up (BOOT GRACE / CALIBRATING): not an error
+    LV.rect(k, 2, y + 2, w - 4, areaH - 4, COLOR.accent, 0, { filled = false, thickness = 3 })
+    local reasons, names = decodeArmd(armd), {}
+    for i = 1, #reasons do names[i] = reasons[i][2] end
+    LV.text(k, 20, cy + 6, w - 40, "FC STARTING UP", DBLSIZE, COLOR.accent, CENTER)
+    LV.text(k, 30, cy + 58, w - 60, table.concat(names, " / "), MIDSIZE, COLOR.white, CENTER)
+    LV.text(k, 20, cy + 100, w - 40, "Keep the model still until the FC has finished - this goes away by itself",
+      SMLSIZE, COLOR.dim, CENTER)
+    LV.text(k, 20, cy + 128, w - 40, "code " .. fmt(armd, 0), SMLSIZE, COLOR.muted, CENTER)
+    return
+  end
+  LV.rect(k, 2, y + 2, w - 4, areaH - 4, COLOR.red, 0, { filled = false, thickness = 6 })
   LV.rect(k, w / 2 - 5, cy - 46, 10, 30, COLOR.red)
   LV.rect(k, w / 2 - 5, cy - 10, 10, 10, COLOR.red)
   if armd == ARMD_ARM_SWITCH_AT_POWERUP then
