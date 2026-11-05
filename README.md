@@ -94,9 +94,10 @@ RotorHUD は Rotorflight の **CRSF カスタムテレメトリ**を使います
 | `RTE#` | Rates profile | 96 | レートプロファイル |
 | `BAT#` | Battery profile | 97 | バッテリープロファイル |
 
-CLI では次のとおりです (Rotorflight 4.6。`telemetry_sensors` は 40 枠あり、書かなかった枠は前の値のまま残るので、0 で埋めています)。
+CLI では次のとおりです (Rotorflight 4.6。`feature TELEMETRY` でテレメトリ機能を有効にします。`telemetry_sensors` は 40 枠あり、書かなかった枠は前の値のまま残るので、0 で埋めています)。
 
 ```
+feature TELEMETRY
 set crsf_telemetry_mode = CUSTOM
 set telemetry_sensors = 3,4,5,6,7,8,15,43,50,60,90,91,93,95,96,97,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 save
@@ -518,10 +519,11 @@ RotorHUD uses Rotorflight's **CRSF custom telemetry**. Enable custom telemetry o
 | `RTE#` | Rates profile | 96 | Rates profile |
 | `BAT#` | Battery profile | 97 | Battery profile |
 
-In the CLI (Rotorflight 4.6; `telemetry_sensors` has 40 slots and slots you don't write keep their old value, so the rest is
+In the CLI (Rotorflight 4.6; `feature TELEMETRY` turns telemetry on; `telemetry_sensors` has 40 slots and slots you don't write keep their old value, so the rest is
 filled with 0):
 
 ```
+feature TELEMETRY
 set crsf_telemetry_mode = CUSTOM
 set telemetry_sensors = 3,4,5,6,7,8,15,43,50,60,90,91,93,95,96,97,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 save
